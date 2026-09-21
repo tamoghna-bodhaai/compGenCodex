@@ -70,6 +70,8 @@ class DocumentRendererTests(unittest.TestCase):
         answers_path, _ = renderer.export(paper, output_format=ExportFormat.DOCX, variant=ExportVariant.ANSWER_KEY)
         self.assertTrue(question_path.exists())
         self.assertTrue(answers_path.exists())
+        self.assertEqual(question_path.name, "Definite_Integrals_Practice_Paper_question.docx")
+        self.assertEqual(answers_path.name, "Definite_Integrals_Practice_Paper_answerkey.docx")
         question_document = Document(question_path)
         question_xml = question_document._element.xml
         question_table_text = "\n".join(cell.text for table in question_document.tables for row in table.rows for cell in row.cells)

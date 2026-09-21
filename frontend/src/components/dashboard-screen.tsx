@@ -76,7 +76,7 @@ export function DashboardScreen() {
   async function exportPdf(paper: PaperSummary) {
     if (exportingPaperId === paper.id) return;
     setExportingPaperId(paper.id);
-    try { await downloadPaper(paper, "pdf", "question_paper"); toast("PDF download started."); }
+    try { await downloadPaper(paper, "pdf", "question_paper"); }
     catch (caught) { toast(caught instanceof Error ? caught.message : "Export failed.", "error"); }
     finally { setExportingPaperId(null); }
   }

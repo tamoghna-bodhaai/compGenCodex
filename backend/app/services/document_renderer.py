@@ -5,7 +5,6 @@ import io
 import re
 import shutil
 import subprocess
-import uuid
 import os
 from collections import defaultdict
 from pathlib import Path
@@ -598,7 +597,9 @@ class PaperDocumentRenderer:
         if not paper["questions"]:
             raise DocumentRenderError("Add at least one question before exporting this paper.")
         self.output_root.mkdir(parents=True, exist_ok=True)
-        stem = self._safe_filename(f"{paper['title']}_{variant.value}_{uuid.uuid4().hex[:8]}")
+        variant_suffix = "answerkey" if variant == ExportVariant.ANSWER_KEY else "question"
+        title = self._safe_filename(str(paper["title"]))
+        stem = f"{title[: 120 - len(variant_suffix) - 1]}_{variant_suffix}"
         if output_format == ExportFormat.DOCX:
             docx_path = self.output_root / f"{stem}.docx"
             self._build_docx(paper, variant, docx_path)

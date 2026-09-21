@@ -100,7 +100,10 @@ export async function downloadPaper(paper: Paper | PaperSummary, format: "pdf" |
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${paper.title}.${format}`;
+  const variantSuffix = variant === "answer_key" ? "answerkey" : "question";
+  const maxTitleLength = 120 - variantSuffix.length - 1;
+  const safeTitle = paper.title.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, maxTitleLength) || "question_paper";
+  anchor.download = `${safeTitle}_${variantSuffix}.${format}`;
   anchor.click();
   URL.revokeObjectURL(url);
 }

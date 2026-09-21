@@ -188,7 +188,6 @@
 .archiveList { display: grid; gap: 8px; }
 .archiveItem { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px 16px; }
 .archiveItem div { display: grid; gap: 4px; min-width: 0; }.archiveItem strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.archiveItem small { color: var(--muted); }
-.paperExportHistory { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--surface); font-size: 11px; }.paperExportHistory button { border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 11px; text-decoration: underline; }
 .bankSummary h2 { margin: 4px 0; font-size: 16px; }
 .bankSummary p { margin: 0; color: var(--muted); font-size: 11px; }
 .chipRow { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
