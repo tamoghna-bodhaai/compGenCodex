@@ -14,6 +14,7 @@ from docx import Document
 from pydantic import ValidationError
 
 from app.core.settings import get_settings
+from app.core.error_safety import safe_error_message
 from app.prompts.ingestion import INGESTION_SYSTEM_PROMPT, build_ingestion_prompt
 from app.schemas.ingestion import ClassificationResponse
 from app.db.database import get_connection
@@ -278,12 +279,15 @@ class QuestionIngestionService:
             row = connection.execute("SELECT * FROM ingestion_jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             raise IngestionError("Ingestion job not found.")
-        return dict(row)
+        item = dict(row)
+        if item.get("error_message"):
+            item["error_message"] = safe_error_message(item["error_message"])
+        return item
 
     def list_jobs(self, limit: int = 20) -> list[dict]:
         with get_connection() as connection:
             rows = connection.execute("SELECT * FROM ingestion_jobs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
-        return [dict(row) for row in rows]
+        return [self.get_job(row["id"]) for row in rows]
 
     def delete_job(self, job_id: str) -> None:
         """Remove a completed ingestion update without touching imported questions."""
@@ -322,7 +326,14 @@ class QuestionIngestionService:
                                        conversion_note=conversion_note, on_progress=progress)
             self._update_job(job_id, state="succeeded", phase="complete", message="Ingestion complete", ingested_questions=result["questions"], finished=True)
         except Exception as error:  # Background work must surface a user-safe failure state.
-            self._update_job(job_id, state="failed", phase="failed", message="Ingestion needs attention", error_message=str(error), finished=True)
+            self._update_job(
+                job_id,
+                state="failed",
+                phase="failed",
+                message="Ingestion needs attention",
+                error_message=safe_error_message(error),
+                finished=True,
+            )
 
     async def ingest(
         self,

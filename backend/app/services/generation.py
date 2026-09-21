@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
+from app.core.error_safety import safe_error_message
 from app.core.settings import Settings, get_settings
 from app.db.database import get_connection
 from app.prompts import concept_blueprint, concept_variation, solution, structural_variation, validator
@@ -262,7 +263,7 @@ class GenerationService:
                     # For reference mode we relax similarity check (allow close)
                     return _Candidate(slot, question, seeds, similarity, attempt)  # type: ignore
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
-                self._log(request, slot=slot, status="retrying", failure_reason=str(error))
+                self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error))
                 raise
 
         return await self._collect(slots, produce)
@@ -295,7 +296,7 @@ class GenerationService:
                         raise GenerationFailure(f"Generated question is too similar to its seed pool ({similarity:.2f}).")
                     return _Candidate(slot, question, seeds, similarity, attempt)
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
-                self._log(request, slot=slot, status="retrying", failure_reason=str(error))
+                self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error))
                 raise
 
         return await self._collect(slots, produce)
@@ -337,7 +338,7 @@ class GenerationService:
                 self._log(request, result=result, status="validated")
                 return result
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
-                self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=str(error))
+                self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=safe_error_message(error))
                 raise
 
         return await self._collect(candidates, validate, key=lambda candidate: candidate.slot)
@@ -352,7 +353,7 @@ class GenerationService:
                 if isinstance(outcome, asyncio.CancelledError):
                     raise outcome
                 slot = key(item)
-                failures[slot.slot] = str(outcome)
+                failures[slot.slot] = safe_error_message(outcome)
             else:
                 successes.append(outcome)
         return successes, failures
@@ -461,7 +462,9 @@ class GenerationService:
                 "INSERT INTO generation_logs (id, request_json, generation_mode, model, status, failure_reason, seed_question_ids, validation_result_json, similarity_score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid.uuid4()), request.model_dump_json(), request.generation_mode.value,
-                    self.settings.generation_model, status, failure_reason, json.dumps(seed_ids), validation_json,
+                    self.settings.generation_model, status,
+                    safe_error_message(failure_reason) if failure_reason else None,
+                    json.dumps(seed_ids), validation_json,
                     similarity, datetime.now(UTC).isoformat(),
                 ),
             )

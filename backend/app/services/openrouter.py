@@ -8,6 +8,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.core.error_safety import PROVIDER_FAILURE_MESSAGE
 from app.core.settings import Settings
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -204,7 +205,9 @@ class OpenRouterClient:
             with urlopen(request, timeout=60) as response:  # noqa: S310 - fixed OpenRouter endpoint
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
-            details = error.read().decode("utf-8", errors="replace")
-            raise OpenRouterError(f"OpenRouter returned HTTP {error.code}: {details}") from error
+            # Do not include the response body. Providers sometimes echo the
+            # rejected Authorization header verbatim, which would leak a key
+            # into a user-visible generation job or API error.
+            raise OpenRouterError(f"{PROVIDER_FAILURE_MESSAGE} (HTTP {error.code}.)") from error
         except URLError as error:
             raise OpenRouterError("Could not reach OpenRouter.") from error

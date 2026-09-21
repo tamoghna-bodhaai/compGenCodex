@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from app.db.database import decode_question_row, get_connection
+from app.core.error_safety import safe_error_message
 from app.schemas.generation import GeneratedSlotResult, GenerationRequest, GenerationSlot
 from app.schemas.papers import AddManualQuestionRequest, PaperCreateRequest, PaperQuestionInput, PaperUpdateRequest, QuestionEditRequest
 from app.services.generation import GenerationService
@@ -37,6 +38,8 @@ def _decode(row: Any) -> dict:
             item[key] = json.loads(item[key])
     if "locked" in item:
         item["locked"] = bool(item["locked"])
+    if item.get("error_message"):
+        item["error_message"] = safe_error_message(item["error_message"])
     return item
 
 
@@ -517,7 +520,13 @@ class PaperService:
             # state for an in-flight task, not a generation failure.
             return
         except Exception as error:
-            self._update_generation_job(job_id, state="failed", message="Generation needs attention", error_message=str(error), finished=True)
+            self._update_generation_job(
+                job_id,
+                state="failed",
+                message="Generation needs attention",
+                error_message=safe_error_message(error),
+                finished=True,
+            )
         finally:
             self._unregister_job_task(job_id)
 
@@ -602,7 +611,13 @@ class PaperService:
             # See run_initial_generation_job.
             return
         except Exception as error:
-            self._update_generation_job(job_id, state="failed", message="Solution generation needs attention", error_message=str(error), finished=True)
+            self._update_generation_job(
+                job_id,
+                state="failed",
+                message="Solution generation needs attention",
+                error_message=safe_error_message(error),
+                finished=True,
+            )
         finally:
             self._unregister_job_task(job_id)
 

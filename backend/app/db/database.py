@@ -203,6 +203,22 @@ def initialize_database(path: Path | None = None) -> Path:
         if applied is None:
             _repair_persisted_latex(connection)
             connection.execute("INSERT INTO app_migrations (name) VALUES (?)", (migration_name,))
+        # Older deployments stored raw OpenRouter HTTP response bodies. Some
+        # providers echo the Authorization header in those bodies, so erase
+        # any historical credential-bearing job/log value on first startup.
+        secret_cleanup_migration = "remove_persisted_provider_secrets_v1"
+        applied = connection.execute("SELECT 1 FROM app_migrations WHERE name = ?", (secret_cleanup_migration,)).fetchone()
+        if applied is None:
+            replacement = "The AI provider rejected the request. Check the server-side OpenRouter configuration and try again."
+            secret_like = "error_message LIKE '%sk-or-%' OR error_message LIKE '%Authorization%' OR error_message LIKE '%api_key%'"
+            connection.execute(f"UPDATE paper_generation_jobs SET error_message = ? WHERE {secret_like}", (replacement,))
+            connection.execute(f"UPDATE ingestion_jobs SET error_message = ? WHERE {secret_like}", (replacement,))
+            connection.execute(
+                "UPDATE generation_logs SET failure_reason = ? "
+                "WHERE failure_reason LIKE '%sk-or-%' OR failure_reason LIKE '%Authorization%' OR failure_reason LIKE '%api_key%'",
+                (replacement,),
+            )
+            connection.execute("INSERT INTO app_migrations (name) VALUES (?)", (secret_cleanup_migration,))
     return target
 
 
