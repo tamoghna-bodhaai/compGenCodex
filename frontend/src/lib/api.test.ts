@@ -42,4 +42,12 @@ describe("apiRequest", () => {
     await api.paperComparison("paper-1");
     expect(fetchMock).toHaveBeenCalledWith("/api/papers/paper-1/comparison", expect.any(Object));
   });
+
+  it("forwards cancellation signals from read helpers", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "paper-1" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const controller = new AbortController();
+    const { api } = await import("@/lib/api");
+    await api.paper("paper-1", controller.signal);
+    expect(fetchMock).toHaveBeenCalledWith("/api/papers/paper-1", expect.objectContaining({ signal: controller.signal }));
+  });
 });

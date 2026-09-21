@@ -20,7 +20,7 @@ export function NewPaperScreen() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => { api.catalog().then((result) => setCatalog(result.items)).catch((caught) => setError(caught instanceof Error ? caught.message : "Couldn’t load the catalog.")).finally(() => setLoading(false)); }, []);
+  useEffect(() => { const controller = new AbortController(); api.catalog(controller.signal).then((result) => setCatalog(result.items)).catch((caught) => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Couldn’t load the catalog."); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => controller.abort(); }, []);
 
   const view = useMemo(() => {
     const subjectRows = catalogRows(catalog, { exam: [creation.exam], subject: [creation.subject] });
@@ -52,7 +52,7 @@ export function NewPaperScreen() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!view.ready) return;
+    if (!view.ready || submitting) return;
     setSubmitting(true);
     try {
       const { subtopic_plans, usesTopicOnlyRequest, ...basePayload } = view.payload;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useWorkspace } from "@/context/workspace-context";
@@ -16,6 +16,8 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
   const [fileName, setFileName] = useState<string>("");
   const formId = "reference-generation-form";
 
+  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+
   function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) { setPreviewUrl(null); setFileName(""); return; }
@@ -30,6 +32,7 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting) return;
     setSubmitting(true);
     const form = event.currentTarget as HTMLFormElement;
     const fd = new FormData(form);

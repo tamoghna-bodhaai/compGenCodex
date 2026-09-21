@@ -667,19 +667,32 @@ class PaperService:
             service = GenerationService()
             semaphore = asyncio.Semaphore(service.settings.max_concurrent_generations)
 
-            async def solve(question: dict) -> tuple[dict, Any]:
-                await self._wait_until_job_can_continue(job_id)
-                async with semaphore:
+            async def solve(question: dict) -> tuple[dict, Any | None, Exception | None]:
+                try:
                     await self._wait_until_job_can_continue(job_id)
-                    result = await service.generate_solution(
-                        question["question_json"], exam=paper["exam"], subject=paper["subject"]
-                    )
-                    return question, result
+                    async with semaphore:
+                        await self._wait_until_job_can_continue(job_id)
+                        result = await service.generate_solution(
+                            question["question_json"], exam=paper["exam"], subject=paper["subject"]
+                        )
+                        return question, result, None
+                except (asyncio.CancelledError, GenerationCancelled):
+                    raise
+                except Exception as error:
+                    # Return the failed question with its error instead of
+                    # propagating it to the coordinator. Other slots can
+                    # therefore keep using the available worker capacity.
+                    return question, None, error
 
             tasks = [asyncio.create_task(solve(question)) for question in questions]
+            failures: list[tuple[dict, str]] = []
             try:
                 for task in asyncio.as_completed(tasks):
-                    question, result = await task
+                    question, result, error = await task
+                    if error is not None:
+                        failures.append((question, safe_error_message(error)))
+                        continue
+                    assert result is not None
                     self._store_solution_result(question, result)
                     job = self._generation_job(job_id)
                     completed = min(job["completed_questions"] + 1, job["total_questions"])
@@ -695,6 +708,22 @@ class PaperService:
                 raise
 
             completed = self._generation_job(job_id)["completed_questions"]
+            if failures:
+                failure_details = "; ".join(
+                    f"Q{question['position']}: {reason}" for question, reason in failures
+                )
+                self._update_generation_job(
+                    job_id,
+                    state="failed",
+                    completed_questions=completed,
+                    message=(
+                        f"Generated {completed} of {len(questions)} worked solutions; "
+                        f"{len(failures)} failed. The remaining questions continued."
+                    ),
+                    error_message=failure_details,
+                    finished=True,
+                )
+                return
             self._update_generation_job(
                 job_id,
                 state="succeeded",

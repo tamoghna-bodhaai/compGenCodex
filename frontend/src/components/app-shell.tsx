@@ -43,5 +43,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  if (pathname === "/login") return <>{children}</>;
   return <WorkspaceProvider><Shell>{children}</Shell></WorkspaceProvider>;
 }

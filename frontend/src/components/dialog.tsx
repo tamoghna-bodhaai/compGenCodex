@@ -12,8 +12,9 @@ export function Dialog({ open, title, subtitle, onClose, children, footer, wide 
     if (open && !dialog.open) dialog.showModal();
     if (!open && dialog.open) dialog.close();
   }, [open]);
+  if (!open) return null;
   return (
-    <dialog ref={ref} className={`${s.dialog} ${wide ? s.dialogWide : ""}`} onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
+    <dialog ref={ref} className={`${s.dialog} ${wide ? s.dialogWide : ""}`} onCancel={(event) => { event.preventDefault(); onClose(); }}>
       <header className={s.modalHead}>
         <div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
         <button className={`${s.button} ${s.iconButton}`} type="button" onClick={onClose} aria-label="Close dialog"><Icon name="close" /></button>

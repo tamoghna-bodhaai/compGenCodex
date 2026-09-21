@@ -14,7 +14,7 @@ function bytes(value: number) {
 export function ExportArchiveScreen() {
   const [items, setItems] = useState<PaperExport[]>([]);
   const [error, setError] = useState("");
-  useEffect(() => { void api.exports().then((result) => setItems(result.items)).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load exports.")); }, []);
+  useEffect(() => { const controller = new AbortController(); void api.exports(undefined, controller.signal).then((result) => setItems(result.items)).catch((caught) => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Could not load exports."); }); return () => controller.abort(); }, []);
   return <section className={s.content}>
     <PageHeader eyebrow="Persistent storage" title="Export archive" description="PDF, DOCX, and TeX files retained on the secure API volume." />
     {error ? <p className={s.errorText}>{error}</p> : items.length === 0 ? <EmptyState icon="archive" title="No archived exports" description="New exports and migrated legacy documents will appear here." /> : <div className={s.archiveList}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCreationPayload, defaultCreation, defaultPlan, paperDashboardState, parentBankSelection } from "@/lib/logic";
+import { buildCreationPayload, defaultCreation, defaultPlan, paperDashboardState, parentBankSelection, remoteDraftAction } from "@/lib/logic";
 import type { PaperSummary } from "@/lib/types";
 
 describe("paper creation payload", () => {
@@ -37,5 +37,16 @@ describe("dashboard state", () => {
 describe("question bank navigation", () => {
   it("moves up exactly one taxonomy level", () => {
     expect(parentBankSelection({ exam: "JEE", subject: "Mathematics", chapter: "Calculus", topic: "Integrals", subtopic: "Definite" })).toEqual({ exam: "JEE", subject: "Mathematics", chapter: "Calculus", topic: "Integrals" });
+  });
+});
+
+describe("live editor reconciliation", () => {
+  it("preserves dirty input when a newer server revision arrives", () => {
+    expect(remoteDraftAction({ id: "q1", updatedAt: "one" }, { id: "q1", updatedAt: "two" }, true)).toBe("preserve");
+  });
+
+  it("accepts remote updates for clean drafts and selection changes", () => {
+    expect(remoteDraftAction({ id: "q1", updatedAt: "one" }, { id: "q1", updatedAt: "two" }, false)).toBe("replace");
+    expect(remoteDraftAction({ id: "q1", updatedAt: "one" }, { id: "q2", updatedAt: "one" }, true)).toBe("replace");
   });
 });

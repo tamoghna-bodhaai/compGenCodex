@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Button, IngestionProgress, JobProgress } from "@/components/ui";
+import { Dialog } from "@/components/dialog";
 
 describe("Button", () => {
   it("does not submit a form unless submit is requested", async () => {
@@ -12,6 +13,38 @@ describe("Button", () => {
     expect(submit).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(submit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Dialog", () => {
+  it("keeps closed dialogs closed and requests close only once", async () => {
+    const close = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(<Dialog open={false} title="Editor" onClose={close}><p>Contents</p></Dialog>);
+    expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+
+    rerender(<Dialog open title="Editor" onClose={close}><p>Contents</p></Dialog>);
+    expect(screen.getByRole("dialog")).toHaveAttribute("open");
+    await user.click(screen.getByRole("button", { name: "Close dialog" }));
+    expect(close).toHaveBeenCalledOnce();
+
+    rerender(<Dialog open={false} title="Editor" onClose={close}><p>Contents</p></Dialog>);
+    expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("routes Escape through the controlled close callback", () => {
+    const close = vi.fn();
+    render(<Dialog open title="Editor" onClose={close}><p>Contents</p></Dialog>);
+    const dialog = screen.getByRole("dialog");
+    dialog.dispatchEvent(new Event("cancel", { bubbles: false, cancelable: true }));
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("mounts only the active dialog when several controlled dialogs exist", () => {
+    const { container } = render(<><Dialog open title="Active" onClose={() => undefined}>Active body</Dialog><Dialog open={false} title="Inactive" onClose={() => undefined}>Inactive body</Dialog></>);
+    expect(within(container).getAllByRole("dialog")).toHaveLength(1);
+    expect(within(container).queryByText("Inactive body")).not.toBeInTheDocument();
   });
 });
 

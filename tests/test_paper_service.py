@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "backend"))
@@ -201,6 +203,42 @@ class PaperServiceTests(unittest.TestCase):
         job = self.service.queue_solution_generation(self.paper["id"])
         self.assertEqual(job["operation"], "solutions")
         self.assertEqual(job["total_questions"], 1)
+
+    def test_solution_generation_continues_after_an_individual_failure(self) -> None:
+        paper_id = self.paper["id"]
+        for stem in ("First solution", "Second solution"):
+            self.service.add_manual_question(
+                paper_id,
+                AddManualQuestionRequest.model_validate(
+                    {
+                        "question_type": "single_correct_mcq",
+                        "stem": stem,
+                        "options": ["A", "B", "C", "D"],
+                        "difficulty": 3,
+                    }
+                ),
+            )
+        job = self.service.queue_solution_generation(paper_id)
+
+        class SelectivelyFailingSolutionService:
+            settings = SimpleNamespace(max_concurrent_generations=2)
+
+            async def generate_solution(self, question: dict, *, exam: str, subject: str) -> SimpleNamespace:
+                if question["stem"] == "First solution":
+                    raise RuntimeError("validator rejected this solution")
+                return SimpleNamespace(solution="Working", correct_answer="B")
+
+        with patch("app.services.papers.GenerationService", return_value=SelectivelyFailingSolutionService()):
+            asyncio.run(self.service.run_solution_generation_job(paper_id, job["id"]))
+
+        updated = self.service.get(paper_id)
+        latest_job = updated["generation_job"]
+        self.assertEqual(latest_job["state"], "failed")
+        self.assertEqual(latest_job["completed_questions"], 1)
+        self.assertIn("remaining questions continued", latest_job["message"])
+        self.assertIn("Q1", latest_job["error_message"])
+        self.assertIsNone(updated["questions"][0]["solution"])
+        self.assertEqual(updated["questions"][1]["solution"], "Working")
 
     def test_branding_profiles_can_be_saved_and_reused(self) -> None:
         profile = BrandingProfileService().save("Apex Academy", {"institution_name": "Apex Academy", "footer_text": "Practice"})

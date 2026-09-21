@@ -21,6 +21,12 @@ export const DIFFICULTIES: Array<["easy" | "medium" | "hard", string, number]> =
   ["hard", "Hard", 5],
 ];
 
+export function remoteDraftAction(source: { id: string; updatedAt: string } | null, next: { id: string; updatedAt?: string }, dirty: boolean): "replace" | "preserve" | "unchanged" {
+  if (!source || source.id !== next.id) return "replace";
+  if (source.updatedAt === (next.updatedAt || "")) return "unchanged";
+  return dirty ? "preserve" : "replace";
+}
+
 export const defaultPlan = (): CreationPlan => ({
   questionCounts: { single_correct_mcq: 5, numerical: 0, multiple_correct_mcq: 0, subjective: 0 },
   difficultyCounts: { easy: 0, medium: 5, hard: 0 },

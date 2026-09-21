@@ -31,6 +31,9 @@ export function DashboardScreen() {
   const [referenceSubmitting, setReferenceSubmitting] = useState(false);
   const [controllingPaperId, setControllingPaperId] = useState<string | null>(null);
   const [deletingPaperId, setDeletingPaperId] = useState<string | null>(null);
+  const [retryingPaperId, setRetryingPaperId] = useState<string | null>(null);
+  const [exportingPaperId, setExportingPaperId] = useState<string | null>(null);
+  const [dismissingJobId, setDismissingJobId] = useState<string | null>(null);
 
   const metrics = useMemo(() => papers.reduce((result, paper) => {
     result.total += 1; result.questions += paper.question_count || 0;
@@ -50,10 +53,13 @@ export function DashboardScreen() {
   const trackedIngestion = ingestionJobs.filter((job) => ["queued", "running", "failed"].includes(job.state));
 
   async function retry(paper: PaperSummary) {
+    if (retryingPaperId === paper.id) return;
+    setRetryingPaperId(paper.id);
     try {
       const endpoint = paper.generation_job?.state === "failed" && paper.generation_job.operation === "solutions" ? `/papers/${paper.id}/solutions/generate` : `/papers/${paper.id}/generate`;
       await api.post(endpoint); await refresh(); toast("Generation queued. Track it in Live activity.");
     } catch (caught) { toast(caught instanceof Error ? caught.message : "Generation failed.", "error"); }
+    finally { setRetryingPaperId(null); }
   }
   async function controlGeneration(paper: PaperSummary, action: "pause" | "resume" | "cancel") {
     setControllingPaperId(paper.id);
@@ -68,15 +74,21 @@ export function DashboardScreen() {
     finally { setControllingPaperId(null); }
   }
   async function exportPdf(paper: PaperSummary) {
+    if (exportingPaperId === paper.id) return;
+    setExportingPaperId(paper.id);
     try { await downloadPaper(paper, "pdf", "question_paper"); toast("PDF download started."); }
     catch (caught) { toast(caught instanceof Error ? caught.message : "Export failed.", "error"); }
+    finally { setExportingPaperId(null); }
   }
   async function dismissIngestionUpdate(jobId: string) {
+    if (dismissingJobId === jobId) return;
+    setDismissingJobId(jobId);
     try {
       await api.deleteIngestionJob(jobId);
       await refresh();
       toast("Ingestion update deleted.");
     } catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t delete the ingestion update.", "error"); }
+    finally { setDismissingJobId(null); }
   }
   async function deletePaper(paper: PaperSummary) {
     if (!window.confirm(`Delete “${paper.title}”? This permanently removes the paper, its questions, and generation history.`)) return;
@@ -90,7 +102,7 @@ export function DashboardScreen() {
   }
 
   return <section className={s.content}>
-    <PageHeader eyebrow="Overview" title="Your paper workspace" description="Create, monitor, curate, and export JEE-ready question papers from one focused workspace." actions={<><Link className={`${s.button} ${s.button_default}`} href="/question-bank"><Icon name="library" />Browse question bank</Link><Button tone="default" icon="sparkle" onClick={() => setReferenceOpen(true)}>Generate from reference</Button><Link className={`${s.button} ${s.button_primary}`} href="/new-paper"><Icon name="plus" />Create paper</Link></>} />
+    <PageHeader eyebrow="Overview" title="Your paper workspace" description="Create, monitor, curate, and export JEE-ready question papers from one focused workspace." actions={<><Link className={`${s.button} ${s.button_default}`} href="/question-bank"><Icon name="library" />Browse question bank</Link><Button tone="default" icon="sparkle" disabled={referenceSubmitting} onClick={() => setReferenceOpen(true)}>{referenceSubmitting ? "Preparing reference…" : "Generate from reference"}</Button><Link className={`${s.button} ${s.button_primary}`} href="/new-paper"><Icon name="plus" />Create paper</Link></>} />
 
     <section className={s.metricStrip} aria-label="Paper overview">
       {[{ key: "all", label: "Total papers", value: metrics.total, icon: "document" as const }, { key: "generating", label: "Generating", value: metrics.generating, icon: "sparkle" as const }, { key: "ready", label: "Ready to export", value: metrics.ready, icon: "check" as const }, { key: "all", label: "Total questions", value: metrics.questions, icon: "questions" as const }].map((item, index) => <button key={`${item.label}-${index}`} className={`${s.metric} ${filter === item.key ? s.metricActive : ""}`} onClick={() => { setFilter(item.key as typeof filter); setShowAll(false); }}><span className={s.metricIcon}><Icon name={item.icon} /></span><span><small>{item.label}</small><strong>{item.value}</strong></span></button>)}

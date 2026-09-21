@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { availability, catalogRows, DIFFICULTIES, parentBankSelection, QUESTION_TYPES } from "@/lib/logic";
@@ -25,16 +25,22 @@ export function QuestionBankScreen() {
   const [detail, setDetail] = useState<SeedQuestion | null>(null);
   const [ingestionOpen, setIngestionOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const catalogRequest = useRef<AbortController | null>(null);
+  const questionListRequest = useRef<AbortController | null>(null);
+  const detailRequest = useRef<AbortController | null>(null);
 
-  const loadCatalog = useCallback(async () => { try { setCatalog((await api.catalog()).items); setError(""); } catch (caught) { setError(caught instanceof Error ? caught.message : "Couldn’t load the catalog."); } finally { setLoading(false); } }, []);
-  useEffect(() => { void loadCatalog(); }, [loadCatalog]);
+  const loadCatalog = useCallback(async () => { catalogRequest.current?.abort(); const controller = new AbortController(); catalogRequest.current = controller; try { setCatalog((await api.catalog(controller.signal)).items); setError(""); } catch (caught) { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Couldn’t load the catalog."); } finally { if (catalogRequest.current === controller) { catalogRequest.current = null; setLoading(false); } } }, []);
+  useEffect(() => { void loadCatalog(); return () => { catalogRequest.current?.abort(); questionListRequest.current?.abort(); detailRequest.current?.abort(); }; }, [loadCatalog]);
 
   const loadQuestions = useCallback(async (nextSelection: BankSelection, nextOffset = 0) => {
+    questionListRequest.current?.abort();
     if (!Object.keys(nextSelection).length) { setQuestions([]); setTotal(0); setOffset(0); return; }
+    const controller = new AbortController(); questionListRequest.current = controller;
     const query = new URLSearchParams({ limit: "50", offset: String(nextOffset) });
     Object.entries(nextSelection).forEach(([key, value]) => { if (value) query.set(key, value); });
-    try { const result = await api.questions(query); setQuestions(result.items); setTotal(result.total); setOffset(result.offset); }
-    catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t load questions.", "error"); }
+    try { const result = await api.questions(query, controller.signal); if (!controller.signal.aborted) { setQuestions(result.items); setTotal(result.total); setOffset(result.offset); } }
+    catch (caught) { if (!controller.signal.aborted) toast(caught instanceof Error ? caught.message : "Couldn’t load questions.", "error"); }
+    finally { if (questionListRequest.current === controller) questionListRequest.current = null; }
   }, [toast]);
 
   const selectBranch = (next: BankSelection) => { setSelection(next); void loadQuestions(next); };
@@ -52,9 +58,9 @@ export function QuestionBankScreen() {
     });
   }, [catalog]);
 
-  async function openQuestion(id: string) { try { setDetail(await api.question(id)); } catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t load the question.", "error"); } }
+  async function openQuestion(id: string) { detailRequest.current?.abort(); const controller = new AbortController(); detailRequest.current = controller; try { const result = await api.question(id, controller.signal); if (!controller.signal.aborted) setDetail(result); } catch (caught) { if (!controller.signal.aborted) toast(caught instanceof Error ? caught.message : "Couldn’t load the question.", "error"); } finally { if (detailRequest.current === controller) detailRequest.current = null; } }
   async function ingest(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setSubmitting(true);
+    event.preventDefault(); if (submitting) return; setSubmitting(true);
     const values = new FormData(event.currentTarget); const file = values.get("file") as File | null; const text = String(values.get("source_text") || "").trim();
     if ((!file || !file.size) && !text) { toast("Upload a PDF/DOCX or paste question text.", "error"); setSubmitting(false); return; }
     try {
