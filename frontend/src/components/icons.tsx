@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "dashboard" | "library" | "plus" | "search" | "document" | "sparkle" | "check" | "questions" | "arrow" | "download" | "close" | "chevron" | "lock" | "branding";
+export type IconName = "dashboard" | "library" | "plus" | "search" | "document" | "sparkle" | "check" | "questions" | "arrow" | "download" | "close" | "chevron" | "lock" | "branding" | "archive";
 
 export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconName }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -14,6 +14,7 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
     close: <path d="m6 6 12 12M18 6 6 18"/>, chevron: <path d="m9 18 6-6-6-6"/>,
     lock: <><rect width="16" height="11" x="4" y="11" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></>,
     branding: <><path d="M4 20h16M6 17V8m6 9V4m6 13v-6"/><circle cx="6" cy="6" r="2"/><circle cx="12" cy="2.5" r="2"/><circle cx="18" cy="9" r="2"/></>,
+    archive: <><path d="M4 7h16v13H4zM3 4h18v3H3z"/><path d="M9 12h6"/></>,
   };
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>{paths[name]}</svg>;
 }

@@ -6,6 +6,7 @@ import type {
   PaperSummary,
   SeedQuestion,
   SeedComparison,
+  PaperExport,
 } from "@/lib/types";
 
 export class ApiError extends Error {
@@ -74,6 +75,8 @@ export const api = {
   updateBrandingProfile: (id: string, body: unknown) => apiRequest<BrandingProfile>(`/branding-profiles/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   duplicateBrandingProfile: (id: string) => apiRequest<BrandingProfile>(`/branding-profiles/${id}/duplicate`, { method: "POST" }),
   deleteBrandingProfile: (id: string) => apiRequest<void>(`/branding-profiles/${id}`, { method: "DELETE" }),
+  exports: (kind?: "paper" | "legacy") => apiRequest<{ items: PaperExport[] }>(`/exports${kind ? `?kind=${kind}` : ""}`),
+  paperExports: (paperId: string) => apiRequest<{ items: PaperExport[] }>(`/exports?paper_id=${encodeURIComponent(paperId)}`),
   post: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
   put: <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   delete: <T>(path: string) => apiRequest<T>(path, { method: "DELETE" }),
@@ -97,4 +100,11 @@ export async function downloadPaper(paper: Paper | PaperSummary, format: "pdf" |
   anchor.download = `${paper.title}.${format}`;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+export function downloadArchivedExport(item: PaperExport) {
+  const anchor = document.createElement("a");
+  anchor.href = `/api/exports/${item.id}/download`;
+  anchor.download = item.filename;
+  anchor.click();
 }

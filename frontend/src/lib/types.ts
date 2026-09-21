@@ -189,6 +189,18 @@ export interface BrandingProfile {
   branding_config: BrandingConfig;
 }
 
+export interface PaperExport {
+  id: string;
+  paper_id: string | null;
+  kind: "paper" | "legacy";
+  filename: string;
+  relative_path: string;
+  media_type: string;
+  byte_size: number;
+  sha256: string;
+  created_at: string;
+}
+
 export interface CreationPlan {
   questionCounts: Record<QuestionType, number>;
   difficultyCounts: Record<"easy" | "medium" | "hard", number>;

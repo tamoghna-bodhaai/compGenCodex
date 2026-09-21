@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.auth import router as auth_router
 from app.api.branding import router as branding_router
+from app.api.exports import router as exports_router
 from app.core.auth import (
     SESSION_COOKIE_NAME,
     AuthenticationConfigurationError,
@@ -26,6 +27,7 @@ app.include_router(questions_router)
 app.include_router(generation_router)
 app.include_router(papers_router)
 app.include_router(branding_router)
+app.include_router(exports_router)
 
 
 @app.middleware("http")

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 
@@ -18,6 +16,7 @@ from app.schemas.papers import (
 )
 from app.services.generation import GenerationFailure
 from app.services.document_renderer import DocumentRenderError, PaperDocumentRenderer
+from app.services.exports import register_export
 from app.services.branding import BrandingProfileService
 from app.services.openrouter import ModelConfigurationError
 from app.services.papers import PaperConflictError, PaperNotFoundError, PaperService
@@ -304,21 +303,15 @@ async def regenerate_unlocked(paper_id: str) -> dict:
         _raise(error)
 
 
-def _cleanup_export(path: Path) -> None:
-    path.unlink(missing_ok=True)
-    if path.suffix == ".pdf":
-        path.with_suffix(".docx").unlink(missing_ok=True)
-
-
 @router.post("/{paper_id}/export")
-def export_paper(paper_id: str, request: PaperExportRequest, background_tasks: BackgroundTasks) -> FileResponse:
+def export_paper(paper_id: str, request: PaperExportRequest) -> FileResponse:
     try:
         paper = PaperService().get(paper_id)
         template_id = request.branding_template_id if request.branding_template_id is not None else paper.get("branding_template_id")
         resolved_branding = BrandingProfileService().resolve(template_id, paper.get("branding_config"))
         paper["branding_config"] = {**resolved_branding, **(request.branding_overrides or {})}
         path, media_type = PaperDocumentRenderer().export(paper, output_format=request.format, variant=request.variant)
-        background_tasks.add_task(_cleanup_export, path)
-        return FileResponse(path, media_type=media_type, filename=path.name, background=background_tasks)
+        register_export(path=path, media_type=media_type, paper_id=paper_id)
+        return FileResponse(path, media_type=media_type, filename=path.name)
     except (PaperNotFoundError, DocumentRenderError) as error:
         _raise(error)

@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import uuid
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -590,7 +591,8 @@ def _add_watermark(paragraph: Any, text: str, opacity: int = 18, rotation: int =
 
 class PaperDocumentRenderer:
     def __init__(self, output_root: Path | None = None) -> None:
-        self.output_root = output_root or Path(__file__).resolve().parents[3] / "output" / "exports"
+        configured = os.getenv("EXPORT_ROOT")
+        self.output_root = output_root or (Path(configured) if configured else Path(__file__).resolve().parents[3] / "output" / "exports")
 
     def export(self, paper: dict[str, Any], *, output_format: ExportFormat, variant: ExportVariant) -> tuple[Path, str]:
         if not paper["questions"]:

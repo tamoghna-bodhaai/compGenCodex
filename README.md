@@ -55,18 +55,47 @@ and a random `AUTH_SESSION_SECRET` of at least 32 characters, and leave
 Create two Railway services from this repository, setting each service's Root
 Directory so it discovers the matching `railway.toml`:
 
-1. Create the **API** service with Root Directory `backend`. Attach a Railway
-   Volume mounted at `/data`, then set `DATABASE_URL=sqlite:////data/question_generator.db`.
+1. Create the **API** service with Root Directory `backend`. Its Dockerfile
+   includes PDF export (LaTeX/LibreOffice) and scanned-PDF OCR (Tesseract).
+   Attach one Railway Volume mounted at `/data`, set the replica count to
+   **one**, then set `DATABASE_URL=sqlite:////data/db/question_generator.db`
+   and `EXPORT_ROOT=/data/exports`. SQLite runs with WAL and a busy timeout;
+   do not attach this volume to multiple API replicas.
    Add `AUTH_ALLOWED_EMAIL=utils@bodhaai.tech`, `AUTH_ACCESS_CODES`, a random
    32+ character `AUTH_SESSION_SECRET`, `AUTH_SESSION_TTL_HOURS=168`, and
    `AUTH_COOKIE_SECURE=true`. Copy the existing OpenRouter variables too when
    AI generation or ingestion is needed.
-2. Create the **frontend** service with Root Directory `frontend`. Set
-   `BACKEND_URL` to the API service's Railway private URL, including its port
-   (for example `http://question-paper-api.railway.internal:8000`). Generate a
-   public domain only for this frontend service.
+2. Create the **frontend** service with Root Directory `frontend`. If the API
+   service is named `api`, set `BACKEND_URL` to
+   `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`. Generate a public
+   domain only for this frontend service; do not generate one for the API.
 3. Confirm the API health check at `/api/health`, then open the frontend public
-   URL. A backend restart must retain the SQLite file on the mounted Volume.
+   URL. A backend restart must retain the database and `/data/exports` archive.
+
+### Migrating existing data
+
+Create a read-only transfer manifest locally (it records database row counts
+and SHA-256 hashes for PDF/DOCX/TEX files):
+
+```bash
+PYTHONPATH=backend backend/.venv/bin/python scripts/inventory_railway_data.py \
+  --database data/question_generator.db --exports output/exports \
+  --manifest railway-import.json
+```
+
+Upload the intended live database to `/data/db/question_generator.db` and the
+supported archive files to `/data/exports` with Railway Volume file tools.
+Then run the following inside the API service exactly once; it is idempotent
+and validates every archive checksum before registering it in the secure
+**Export archive** page:
+
+```bash
+PYTHONPATH=/app python /app/scripts/import_legacy_exports.py \
+  --manifest /data/railway-import.json --export-root /data/exports
+```
+
+Keep the manifest on the volume, enable Railway Volume backups, and rehearse a
+restore into a staging environment before relying on production data.
 
 The backend is intentionally private behind the frontend proxy. Before any
 multi-user or production release, replace shared codes and SQLite with a
@@ -146,4 +175,9 @@ Use `POST /api/papers` with the same body as the generation endpoint to create a
 
 ## Paper exports
 
-`POST /api/papers/{paper_id}/export` streams a document download. Send `{"format":"docx","variant":"question_paper"}` for the student paper, or switch `format` to `pdf` and/or `variant` to `answer_key`. Set optional `branding_config` fields through the paper update endpoint: `institution_name`, `duration_minutes`, `total_marks`, and `instructions` (an array of strings). Mathematical source markup is converted to printable Unicode notation; it is never emitted as raw LaTex.
+`POST /api/papers/{paper_id}/export` saves a document on the persistent export
+volume, records it in export history, and streams the initial download. Send
+`{"format":"docx","variant":"question_paper"}` for the student paper, or
+switch `format` to `pdf` and/or `variant` to `answer_key`. The authenticated
+`GET /api/exports` and `GET /api/exports/{export_id}/download` endpoints power
+the Export archive page, including migrated legacy PDF/DOCX/TEX files.

@@ -1,0 +1,127 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=19mm,top=17mm,bottom=17mm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{mathptmx}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{draftwatermark}
+\usepackage{graphicx}
+\usepackage{array,tabularx,booktabs}
+\usepackage{titlesec}
+\titleformat*{\section}{\Large\mdseries}
+\titleformat*{\subsection}{\large\mdseries}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
+\setlist[enumerate,1]{leftmargin=1.1em,itemsep=3pt,parsep=2pt}
+\setlist[itemize]{leftmargin=1.4em,itemsep=1pt}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\footnotesize {}}
+\fancyhead[C]{\footnotesize {Practice Paper}}
+\fancyhead[R]{\footnotesize {}}
+\fancyfoot[L]{\footnotesize Think C}
+\fancyfoot[C]{\footnotesize Education is not just about Information  $\cdot$  Page \thepage}
+\fancyfoot[R]{\footnotesize }
+\renewcommand{\headrulewidth}{0.4pt}
+\SetWatermarkText{ThinkC}
+\SetWatermarkScale{1.4}
+\SetWatermarkAngle{45}
+\SetWatermarkLightness{0.82}
+\begin{document}
+\vspace{2mm}
+\noindent {Marks : 100} \hfill {Time : 3 : 00 hours}
+\noindent\rule{\linewidth}{1.1pt}\vspace{-1mm}\noindent\rule{\linewidth}{0.5pt}
+{\centering \Large {JEE MAINS PART VARIATION}\par}
+\noindent\rule{\linewidth}{1.1pt}\vspace{-1mm}\noindent\rule{\linewidth}{0.5pt}
+\vspace{2mm}
+
+\begin{enumerate}[resume]
+\item Let the coefficient of $x$ in the expansion of $(px^2+qx+r)(1-2x)^8$ be $-20$, while the coefficients of $x^2$ and $x^3$ are both zero. Then the value of $p+q-r$ is: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad 81 & (B) \quad 137 & (C) \quad 143 & (D) \quad 167 \\[10pt]
+\end{tabularx}}
+\item Let $x$ be a root of $x^2-x+1=0$. The value of
+\[
+\sum_{k=1}^{14}\left(x^k+\frac{1}{x^k}\right)^4
+\]
+is: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $64$ & (B) \quad $70$ & (C) \quad $74$ & (D) \quad $84$ \\[10pt]
+\end{tabularx}}
+\item Let $f:\mathbb{R}\to(0,\text{ }\infty)$ be twice differentiable in a neighbourhood of $2$, with $f(2)=12$, $f'(2)=3$ and $f''(2)=10$. Then the value of
+\[\lim_{x\to 0}\frac{\left(\dfrac{f(2+x)}{12}\right)^{\frac{12}{x}}e^{-3}-1}{x}
+\]
+is: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $\dfrac{37}{8}$ & (B) \quad $\dfrac{17}{8}$ & (C) \quad $\dfrac{37}{4}$ & (D) \quad $\dfrac{3}{8}$ \\[10pt]
+\end{tabularx}}
+\item Let $V=(1,-2)$ be the vertex of the parabola $(x-1)^2=8(y+2)$. A point $Q$ moves on this parabola, and $P$ divides the segment $VQ$ internally in the ratio $VP:PQ=2:3$. The locus of $P$ is a parabola $C$. If a chord of $C$ is bisected at the point $M=(3,1)$, then the equation of this chord is: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $5x-4y-11=0$ & (B) \quad $4x-5y-7=0$ & (C) \quad $5x-4y-3=0$ & (D) \quad $4x-5y-1=0$ \\[10pt]
+\end{tabularx}}
+\item The value of \(\displaystyle I=\int_{-\pi/2}^{3\pi/2}\left|\sin 3x+\sin x\right|\,dx\) is \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad \(\dfrac{8}{3}\) & (B) \quad \(\dfrac{16}{3}\) & (C) \quad \(4\) & (D) \quad \(\dfrac{32}{3}\) \\[10pt]
+\end{tabularx}}
+\item Let $S=\{1,2,3,4,5\}$. The number of relations $R$ on $S$ that are reflexive and symmetric, and satisfy $(2,3)\in R$ but $(1,2)\notin R$, is equal to: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $64$ & (B) \quad $128$ & (C) \quad $256$ & (D) \quad $512$ \\[10pt]
+\end{tabularx}}
+\item Let $(u_n)_{n\geq 1}$ be a strictly increasing geometric progression of positive real numbers. If
+\[
+u_2u_3u_4u_5=82944\quad\text{and}\quad u_1+u_3+u_5=63,
+\]
+then the value of $u_4+u_6+u_8$ is: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad 468 & (B) \quad 492 & (C) \quad 504 & (D) \quad 516 \\[10pt]
+\end{tabularx}}
+\item Let $f:\{1,2,3,4,5\}\to\{1,2,3,\ldots,10\}$ be a strictly increasing function satisfying $f(i)\neq i+1$ for every $i\in\{1,2,3,4,5\}$. The number of such functions is \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad 120 & (B) \quad 126 & (C) \quad 132 & (D) \quad 140 \\[10pt]
+\end{tabularx}}
+\item Let $\vec a=\hat i+\hat j$ and $\vec b=\hat i-\hat j$. If a vector $\vec c$ satisfies $\vec a\times\vec c=\vec b$ and $\vec c\cdot(\hat i+\hat j+\hat k)=3$, then $\left|2\vec a+\vec c\right|^2$ is equal to: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $19$ & (B) \quad $17$ & (C) \quad $21$ & (D) \quad $15$ \\[10pt]
+\end{tabularx}}
+\item A circle is given by $x^2+y^2+6x-8y-11=0$. Tangents drawn to it at two points $A$ and $B$ meet at $P$. If the central angle subtended by the chord $AB$ is always $120^\circ$, then the locus of $P$ is \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X}
+(A) \quad $x^2+y^2+6x-8y-119=0$ & (B) \quad $x^2+y^2+6x-8y+25=0$ \\[10pt]
+(C) \quad $x^2+y^2+6x-8y-47=0$ & (D) \quad $x^2+y^2+6x-8y-83=0$ \\[10pt]
+\end{tabularx}}
+\item The area of the portion of the disc $x^2+y^2\le 4$ that lies outside the region enclosed by the curves $y=|x|$ and $y=2-|x|$ is \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $4\pi-2$ & (B) \quad $4\pi-4$ & (C) \quad $2\pi-2$ & (D) \quad $4\pi-1$ \\[10pt]
+\end{tabularx}}
+\item A hyperbola with its transverse axis along the $x$-axis has the same foci as the ellipse $\frac{x^2}{25}+\frac{y^2}{9}=1$. If the eccentricity of the hyperbola is $\frac{3}{2}$, then its latus rectum is \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $\frac{5}{3}$ & (B) \quad $\frac{20}{3}$ & (C) \quad $\frac{40}{3}$ & (D) \quad $\frac{80}{9}$ \\[10pt]
+\end{tabularx}}
+\item Let \(S\text{ be the sum of all real solutions of }\(\left(x+2\right)^2-7\left|x+2\right|+10=0\). Then \(S\) is equal to: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad \(-8\) & (B) \quad \(0\) & (C) \quad \(8\) & (D) \quad \(-4\) \\[10pt]
+\end{tabularx}}
+\item Let $H$ be the foot of the perpendicular drawn from $P(6,2,3)$ to the line $\ell$ given by $\vec r=(\hat i+2\hat j-\hat k)+\lambda(2\hat i-\hat j+2\hat k)$. If $\vec h$ denotes the position vector of $H$ with respect to the origin, then the length of the projection of $\vec h$ on the vector $\hat i+2\hat j+2\hat k$ is \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X X X}
+(A) \quad $\frac{11}{3}$ & (B) \quad $\frac{11}{9}$ & (C) \quad $\frac{22}{3}$ & (D) \quad $\frac{5}{3}$ \\[10pt]
+\end{tabularx}}
+\item Two parallel lines are separated by a distance of $8$ units. A point $P$ lies between them, at perpendicular distances $5$ units and $3$ units from the two lines, respectively. Points $Q$ and $R$ are chosen on the first and second parallel lines such that $	riangle PQR$ is equilateral. The area of $	riangle PQR$, in square units, is: \hfill [4 marks]
+{\renewcommand{\arraystretch}{1.8}
+\begin{tabularx}{\linewidth}{X X}
+(A) \quad $\dfrac{49\sqrt{3}}{3}$ & (B) \quad $\dfrac{35\sqrt{3}}{2}$ \\[10pt]
+(C) \quad $\dfrac{49\sqrt{3}}{4}$ & (D) \quad $\dfrac{28\sqrt{3}}{3}$ \\[10pt]
+\end{tabularx}}
+\end{enumerate}
+\end{document}

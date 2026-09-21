@@ -105,6 +105,21 @@ CREATE TABLE IF NOT EXISTS branding_profiles (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS paper_exports (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('paper', 'legacy')),
+    filename TEXT NOT NULL,
+    relative_path TEXT NOT NULL UNIQUE,
+    media_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS paper_exports_paper_created_idx
+    ON paper_exports (paper_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS paper_exports_kind_created_idx
+    ON paper_exports (kind, created_at DESC);
 CREATE TABLE IF NOT EXISTS paper_sections (
     id TEXT PRIMARY KEY,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -165,6 +180,11 @@ def initialize_database(path: Path | None = None) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(target) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
+        # Railway mounts one durable volume on a single API replica. WAL keeps
+        # concurrent reads responsive while the short busy timeout absorbs
+        # brief write contention from background jobs.
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA busy_timeout = 5000")
         connection.executescript(SQLITE_SCHEMA)
         # SQLite cannot add a CHECK constraint to an existing table without a
         # rebuild.  This small, backwards-compatible migration adds the
@@ -192,6 +212,7 @@ def get_connection(path: Path | None = None) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(target)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
     try:
         yield connection
         connection.commit()
