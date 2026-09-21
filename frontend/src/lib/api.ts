@@ -63,6 +63,7 @@ export const api = {
   paperQuestionSeeds: (paperId: string, questionId: string) => apiRequest<SeedComparison>(`/papers/${paperId}/questions/${questionId}/seeds`),
   createPaper: (body: unknown) => apiRequest<Paper>("/papers", { method: "POST", body: JSON.stringify(body) }),
   updatePaper: (id: string, body: unknown) => apiRequest<Paper>(`/papers/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deletePaper: (id: string) => apiRequest<void>(`/papers/${id}`, { method: "DELETE" }),
   catalog: () => apiRequest<{ items: CatalogRow[] }>("/questions/catalog"),
   ingestionJobs: (signal?: AbortSignal) => apiRequest<{ items: IngestionJob[] }>("/questions/ingestion-jobs", { signal }),
   deleteIngestionJob: (id: string) => apiRequest<void>(`/questions/ingestion-jobs/${id}`, { method: "DELETE" }),

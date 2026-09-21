@@ -143,6 +143,20 @@ class PaperService:
         return self.get(paper_id)
 
     def delete(self, paper_id: str) -> None:
+        # Generation tasks run in-process. Cancel any active work before the
+        # database cascade removes its job and paper rows.
+        with get_connection() as connection:
+            exists = connection.execute("SELECT 1 FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            if exists is None:
+                raise PaperNotFoundError("Paper not found")
+            job_ids = [row["id"] for row in connection.execute(
+                "SELECT id FROM paper_generation_jobs WHERE paper_id = ? AND state IN ('queued', 'running')",
+                (paper_id,),
+            ).fetchall()]
+        for job_id in job_ids:
+            task = self._active_generation_tasks.get(job_id)
+            if task and not task.done():
+                task.cancel()
         with get_connection() as connection:
             cursor = connection.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
             if cursor.rowcount != 1:
@@ -491,10 +505,16 @@ class PaperService:
                 finished=True,
             )
         except asyncio.CancelledError:
-            if self._generation_job(job_id).get("control_state") != "cancelled":
+            try:
+                job = self._generation_job(job_id)
+            except PaperNotFoundError:
+                return
+            if job.get("control_state") != "cancelled":
                 self._update_generation_job(job_id, state="failed", message="Generation interrupted", error_message="Generation was interrupted.", finished=True)
             return
-        except GenerationCancelled:
+        except (GenerationCancelled, PaperNotFoundError):
+            # A deleted paper cascades its job rows. That is a normal terminal
+            # state for an in-flight task, not a generation failure.
             return
         except Exception as error:
             self._update_generation_job(job_id, state="failed", message="Generation needs attention", error_message=str(error), finished=True)
@@ -571,10 +591,15 @@ class PaperService:
                 finished=True,
             )
         except asyncio.CancelledError:
-            if self._generation_job(job_id).get("control_state") != "cancelled":
+            try:
+                job = self._generation_job(job_id)
+            except PaperNotFoundError:
+                return
+            if job.get("control_state") != "cancelled":
                 self._update_generation_job(job_id, state="failed", message="Solution generation interrupted", error_message="Solution generation was interrupted.", finished=True)
             return
-        except GenerationCancelled:
+        except (GenerationCancelled, PaperNotFoundError):
+            # See run_initial_generation_job.
             return
         except Exception as error:
             self._update_generation_job(job_id, state="failed", message="Solution generation needs attention", error_message=str(error), finished=True)

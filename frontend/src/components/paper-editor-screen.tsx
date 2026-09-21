@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api, downloadArchivedExport, downloadPaper } from "@/lib/api";
 import { isActiveGeneration } from "@/lib/logic";
 import type { BrandingProfile, Paper, PaperExport, PaperQuestion, QuestionDraft } from "@/lib/types";
@@ -24,6 +25,7 @@ function QuestionCard({ question, index, selected, draft, onSelect }: { question
 }
 
 export function PaperEditorScreen({ paperId }: { paperId: string }) {
+  const router = useRouter();
   const { refresh: refreshWorkspace, toast } = useWorkspace();
   const [paper, setPaper] = useState<Paper | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,6 +83,17 @@ export function PaperEditorScreen({ paperId }: { paperId: string }) {
   async function addSection() { if (!paper) return; const title = window.prompt("Section title", `Section ${paper.sections.length + 1}`); if (title?.trim()) await mutate(() => api.post(`/papers/${paperId}/sections`, { title: title.trim() }), "Section added."); }
   async function exportDocument() { if (!paper) return; try { await downloadPaper(paper, exportFormat, view === "answers" ? "answer_key" : "question_paper", paper.branding_template_id, { total_marks: Number(exportMarks) || null, duration_minutes: Number(exportMinutes) || null }); setExportHistory((await api.paperExports(paperId)).items); toast(`${exportFormat.toUpperCase()} download started.`); } catch (caught) { toast(caught instanceof Error ? caught.message : "Export failed.", "error"); } }
   async function selectBrandingTemplate(templateId: string) { if (!paper) return; try { await api.updatePaper(paper.id, { branding_template_id: templateId || null }); await refresh(); toast(templateId ? "Branding template selected for exports." : "Paper defaults selected for exports."); } catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t select branding.", "error"); } }
+  async function deletePaper() {
+    if (!paper || !window.confirm(`Delete “${paper.title}”? This permanently removes the paper, its questions, and generation history.`)) return;
+    try {
+      setBusy(true);
+      await api.deletePaper(paper.id);
+      await refreshWorkspace();
+      toast("Paper deleted.");
+      router.push("/");
+    } catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t delete the paper.", "error"); }
+    finally { setBusy(false); }
+  }
 
   if (loading) return <section className={s.content}><EmptyState title="Opening paper" description="Loading questions, sections, and generation status…" /></section>;
   if (error || !paper) return <section className={s.content}><EmptyState title="Couldn’t open this paper" description={error || "Paper not found."} action={<Button onClick={() => void loadPaper()}>Retry</Button>} /></section>;
@@ -90,7 +103,7 @@ export function PaperEditorScreen({ paperId }: { paperId: string }) {
   const jobActive = isActiveGeneration(paper);
   let index = 0;
   return <section className={`${s.content} ${s.editorContent}`}>
-    <PageHeader eyebrow={`${paper.exam} · ${paper.subject}`} title={<span className={s.titleEdit}><input id="paper-title" defaultValue={paper.title} aria-label="Paper title" /><Button tone="quiet" size="small" onClick={() => void saveTitle()}>Save title</Button></span>} description={<>{(paper.generation_config.topics || []).join(", ") || "No topic set"} · <strong>{paper.status}</strong></>} actions={<><Button onClick={() => setDialog("branding")}>Paper overrides</Button><Button disabled={!remaining || jobActive || busy} onClick={() => void mutate(() => api.post(`/papers/${paperId}/generate`), "Generation queued. Progress is tracked live.")}>{paper.question_count ? `Generate ${remaining} remaining` : "Generate draft"}</Button><Button disabled={!paper.question_count || jobActive || busy} onClick={() => void mutate(() => api.post(`/papers/${paperId}/regenerate-unlocked`), "Unlocked questions regenerated.")}>Regenerate unlocked</Button><span className={s.exportControls}><Select aria-label="Branding template" value={paper.branding_template_id || ""} onChange={(event) => void selectBrandingTemplate(event.target.value)}><option value="">No branding / paper defaults</option>{brandingTemplates.map((template) => <option value={template.id} key={template.id}>{template.name}</option>)}</Select><Input aria-label="Export total marks" type="number" min={1} value={exportMarks} onChange={(event) => setExportMarks(Number(event.target.value) || "")} placeholder="Marks" /><Input aria-label="Export duration minutes" type="number" min={1} value={exportMinutes} onChange={(event) => setExportMinutes(Number(event.target.value) || "")} placeholder="Minutes" /><Select aria-label="Export format" value={exportFormat} onChange={(event) => setExportFormat(event.target.value as "pdf" | "docx")}><option value="pdf">PDF</option><option value="docx">DOCX</option></Select><Button tone="primary" icon="download" onClick={() => void exportDocument()}>Export</Button></span></>} />
+    <PageHeader eyebrow={`${paper.exam} · ${paper.subject}`} title={<span className={s.titleEdit}><input id="paper-title" defaultValue={paper.title} aria-label="Paper title" /><Button tone="quiet" size="small" onClick={() => void saveTitle()}>Save title</Button></span>} description={<>{(paper.generation_config.topics || []).join(", ") || "No topic set"} · <strong>{paper.status}</strong></>} actions={<><Button tone="danger" disabled={busy} onClick={() => void deletePaper()}>Delete paper</Button><Button onClick={() => setDialog("branding")}>Paper overrides</Button><Button disabled={!remaining || jobActive || busy} onClick={() => void mutate(() => api.post(`/papers/${paperId}/generate`), "Generation queued. Progress is tracked live.")}>{paper.question_count ? `Generate ${remaining} remaining` : "Generate draft"}</Button><Button disabled={!paper.question_count || jobActive || busy} onClick={() => void mutate(() => api.post(`/papers/${paperId}/regenerate-unlocked`), "Unlocked questions regenerated.")}>Regenerate unlocked</Button><span className={s.exportControls}><Select aria-label="Branding template" value={paper.branding_template_id || ""} onChange={(event) => void selectBrandingTemplate(event.target.value)}><option value="">No branding / paper defaults</option>{brandingTemplates.map((template) => <option value={template.id} key={template.id}>{template.name}</option>)}</Select><Input aria-label="Export total marks" type="number" min={1} value={exportMarks} onChange={(event) => setExportMarks(Number(event.target.value) || "")} placeholder="Marks" /><Input aria-label="Export duration minutes" type="number" min={1} value={exportMinutes} onChange={(event) => setExportMinutes(Number(event.target.value) || "")} placeholder="Minutes" /><Select aria-label="Export format" value={exportFormat} onChange={(event) => setExportFormat(event.target.value as "pdf" | "docx")}><option value="pdf">PDF</option><option value="docx">DOCX</option></Select><Button tone="primary" icon="download" onClick={() => void exportDocument()}>Export</Button></span></>} />
     {exportHistory.length > 0 && <div className={s.paperExportHistory}><strong>Saved exports</strong>{exportHistory.slice(0, 3).map((item) => <button key={item.id} type="button" onClick={() => downloadArchivedExport(item)}>{item.filename}</button>)}</div>}
     <div className={s.editorTabs} role="tablist"><button role="tab" aria-selected={view === "questions"} className={view === "questions" ? s.editorTabActive : ""} onClick={() => setView("questions")}>Question paper</button><button role="tab" aria-selected={view === "answers"} className={view === "answers" ? s.editorTabActive : ""} onClick={() => setView("answers")}>Answer key</button></div>
     {paper.generation_job && <JobProgress job={paper.generation_job} onPause={() => void mutate(() => api.post(`/papers/${paperId}/generation/pause`), "Generation paused. Completed work remains available.")} onResume={() => void mutate(() => api.post(`/papers/${paperId}/generation/resume`), "Generation resumed.")} onCancel={() => { if (window.confirm("Cancel this generation? Completed work will be kept.")) void mutate(() => api.post(`/papers/${paperId}/generation/cancel`), "Generation cancelled. Partial work is retained."); }} />}

@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT_DIR / "backend"))
 from app.schemas.papers import AddManualQuestionRequest, PaperCreateRequest, PaperUpdateRequest, QuestionEditRequest
 from app.db.database import get_connection
 from app.services.branding import BrandingProfileService
-from app.services.papers import PaperConflictError, PaperService
+from app.services.papers import PaperConflictError, PaperNotFoundError, PaperService
 from app.services.seed_import import upsert_seed_questions
 
 
@@ -97,6 +97,30 @@ class PaperServiceTests(unittest.TestCase):
         paper = self.service.update(self.paper["id"], PaperUpdateRequest(title="Updated Integral Revision"))
         self.assertEqual(paper["title"], "Updated Integral Revision")
         self.assertEqual(paper["generation_config"]["title"], "Updated Integral Revision")
+
+    def test_delete_removes_papers_in_every_status_and_their_related_rows(self) -> None:
+        draft = self.paper
+        generated = self.service.create(paper_request())
+        final = self.service.create(paper_request())
+        self.service.update(generated["id"], PaperUpdateRequest(status="generated"))
+        self.service.update(final["id"], PaperUpdateRequest(status="final"))
+        self.service.add_section(final["id"], "Section A")
+        self.service.add_manual_question(
+            final["id"],
+            AddManualQuestionRequest.model_validate({"question_type": "single_correct_mcq", "stem": "Question", "options": ["A", "B", "C", "D"], "difficulty": 3}),
+        )
+        self.service.queue_initial_generation(draft["id"])
+
+        for paper in (draft, generated, final):
+            self.service.delete(paper["id"])
+            with self.assertRaises(PaperNotFoundError):
+                self.service.get(paper["id"])
+
+        with get_connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM papers").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM paper_sections").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM paper_questions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM paper_generation_jobs").fetchone()[0], 0)
 
     def test_subtopic_plans_create_one_section_each(self) -> None:
         paper = self.service.create(
