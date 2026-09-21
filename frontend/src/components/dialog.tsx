@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { Icon } from "@/components/icons";
 import s from "@/styles/ui.module.css";
 
-export function Dialog({ open, title, subtitle, onClose, children, wide = false }: { open: boolean; title: string; subtitle?: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+export function Dialog({ open, title, subtitle, onClose, children, footer, wide = false }: { open: boolean; title: string; subtitle?: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
@@ -19,6 +19,7 @@ export function Dialog({ open, title, subtitle, onClose, children, wide = false 
         <button className={`${s.button} ${s.iconButton}`} type="button" onClick={onClose} aria-label="Close dialog"><Icon name="close" /></button>
       </header>
       {children}
+      {footer && <footer className={s.modalFooter}>{footer}</footer>}
     </dialog>
   );
 }

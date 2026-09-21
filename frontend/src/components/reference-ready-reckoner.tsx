@@ -14,6 +14,7 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
   const [submitting, setSubmitting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string>("");
+  const formId = "reference-generation-form";
 
   function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -67,9 +68,15 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
   }
 
   return (
-    <Dialog open={open} title="Generate from reference" subtitle="Upload a picture or short paper — get structural variations instantly. Reuses structural mode & saved to history." onClose={onClose}>
+    <Dialog
+      open={open}
+      title="Generate from reference"
+      subtitle="Upload a picture or short paper — get structural variations instantly. Reuses structural mode & saved to history."
+      onClose={onClose}
+      footer={<div className={s.modalActions}><Button type="button" onClick={onClose}>Cancel</Button><Button tone="primary" type="submit" form={formId} disabled={submitting}>{submitting ? "Uploading & extracting…" : "Generate"}</Button></div>}
+    >
       <div className={s.modalBody}>
-        <form className={s.formGrid} onSubmit={submit}>
+        <form id={formId} className={s.formGrid} onSubmit={submit}>
           <Field label="Reference file (image PNG/JPEG/WEBP, PDF, DOCX) — up to 35 MB">
             <input className={s.input} name="file" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" required onChange={onFileChange} />
             {fileName && <small className={s.muted}>{fileName}</small>}
@@ -78,7 +85,7 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
           <Field label="Paper title (optional)">
             <Input name="title" placeholder="e.g. JEE Mains — Waves variation" />
           </Field>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className={s.referenceFields}>
             <Field label="Desired number of questions (no cap)">
               <Input name="desired_count" type="number" min={1} max={200} defaultValue={5} required />
             </Field>
@@ -104,10 +111,6 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
             <Input name="subject" placeholder="Physics / Mathematics / Chemistry" />
           </Field>
           <p className={s.muted}>Reuses <strong>structural variation</strong> mode. Generates without ingesting to DB first — ready reckoner, saved to paper history for export.</p>
-          <div className={s.modalActions}>
-            <Button type="button" onClick={onClose}>Cancel</Button>
-            <Button tone="primary" type="submit" disabled={submitting}>{submitting ? "Uploading & extracting…" : "Generate"}</Button>
-          </div>
         </form>
       </div>
     </Dialog>
