@@ -40,6 +40,10 @@ class _Candidate:
     seeds: list[RetrievalCandidate]
     similarity: float
     attempt: int
+    reference_question_id: str | None = None
+    reference_question_index: int | None = None
+    reference_question_number: int | None = None
+    reference_reused: bool = False
 
 
 def _deterministic_failure(question: GeneratedQuestion, slot: GenerationSlot) -> str | None:
@@ -217,8 +221,16 @@ class GenerationService:
                         notification = before_slot(slot)
                         if notification is not None:
                             await notification
-                    # Pick reference cyclically
-                    ref = reference_questions[(slot.slot - 1) % len(reference_questions)]
+                    # Preserve the selected reference order. Repeat only after
+                    # the selected set is exhausted.
+                    reference_index = (slot.slot - 1) % len(reference_questions)
+                    ref = reference_questions[reference_index]
+                    reference_id = ref.get("reference_question_id") or f"reference-{reference_index + 1}"
+                    source_number = ref.get("source_question_number")
+                    try:
+                        source_number = int(source_number) if source_number is not None else None
+                    except (TypeError, ValueError):
+                        source_number = None
                     # Build synthetic RetrievalCandidate for downstream prompt/validation
                     # Create minimal mock with prompt_payload
                     @dataclass
@@ -242,7 +254,7 @@ class GenerationService:
                             }
 
                     synthetic = _RefSeed(
-                        id=f"ref-{slot.slot}-{ref.get('source_question_number', slot.slot)}",
+                        id=reference_id,
                         question_json={"stem": ref.get("stem"), "options": ref.get("options")},
                         primary_concept=ref.get("primary_concept") or "reference",
                         question_archetype=ref.get("question_archetype") or "reference",
@@ -261,7 +273,13 @@ class GenerationService:
                     question = await self._generate_question(request, slot, seeds, effective_instruction, reference_images)
                     similarity = max_seed_similarity(question, seeds)  # against synthetic
                     # For reference mode we relax similarity check (allow close)
-                    return _Candidate(slot, question, seeds, similarity, attempt)  # type: ignore
+                    return _Candidate(
+                        slot, question, seeds, similarity, attempt,
+                        reference_question_id=reference_id,
+                        reference_question_index=reference_index,
+                        reference_question_number=source_number,
+                        reference_reused=slot.slot > len(reference_questions),
+                    )  # type: ignore
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
                 self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error))
                 raise
@@ -334,6 +352,10 @@ class GenerationService:
                     similarity_score=candidate.similarity,
                     validation=validation,
                     generation_attempt=candidate.attempt,
+                    reference_question_id=candidate.reference_question_id,
+                    reference_question_index=candidate.reference_question_index,
+                    reference_question_number=candidate.reference_question_number,
+                    reference_reused=candidate.reference_reused,
                 )
                 self._log(request, result=result, status="validated")
                 return result

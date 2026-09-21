@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -279,6 +280,55 @@ class PaperServiceTests(unittest.TestCase):
         self.assertEqual([seed["id"] for seed in result["seeds"]], list(reversed(seed_ids)))
         self.assertEqual(result["generation_metadata"]["similarity_score"], 0.42)
         self.assertEqual(result["missing_seed_question_ids"], [])
+
+    def test_reference_snapshot_preserves_source_numbers_and_comparison_mapping(self) -> None:
+        references = [
+            {"source_question_number": 10, "question_type": "single_correct_mcq", "difficulty": 3, "stem": "Original ten", "options": ["A", "B", "C", "D"]},
+            {"source_question_number": 11, "question_type": "single_correct_mcq", "difficulty": 3, "stem": "Original eleven", "options": ["A", "B", "C", "D"]},
+            {"source_question_number": 25, "question_type": "single_correct_mcq", "difficulty": 3, "stem": "Original twenty five", "options": ["A", "B", "C", "D"]},
+        ]
+        paper = self.service.create_reference_paper(
+            title="Filtered reference",
+            exam="JEE",
+            subject="Mathematics",
+            reference_questions=references,
+            reference_images=[],
+            custom_instruction="",
+            desired_count=4,
+            reference_filter_raw="10-11 & 25",
+            reference_filter_formatted="10-11,25",
+        )
+        reloaded = self.service.get(paper["id"])
+        snapshot = reloaded["generation_config"]["reference_questions"]
+        self.assertEqual([item["source_question_number"] for item in snapshot], [10, 11, 25])
+        self.assertEqual(reloaded["generation_config"]["reference_filter_formatted"], "10-11,25")
+
+        now = "2026-09-21T00:00:00+00:00"
+        with get_connection() as connection:
+            for position, reference_index in enumerate([0, 1, 2, 0], start=1):
+                reference = snapshot[reference_index]
+                question_id = f"generated-{position}"
+                metadata = {
+                    "origin": "generated",
+                    "generation_slot": position,
+                    "reference_mapping": {
+                        "reference_question_id": reference["reference_question_id"],
+                        "reference_question_index": reference_index,
+                        "source_question_number": reference["source_question_number"],
+                        "reference_reused": position > len(snapshot),
+                    },
+                }
+                connection.execute(
+                    "INSERT INTO paper_questions (id, paper_id, section_id, position, question_json, answer_json, solution, question_type, difficulty, locked, generation_metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                    (question_id, paper["id"], None, position, json.dumps({"stem": f"Generated {position}", "options": ["A", "B", "C", "D"]}), json.dumps({"correct_answer": "A"}), "Solution", "single_correct_mcq", 3, json.dumps(metadata), now, now),
+                )
+
+        comparison = self.service.get_paper_comparison(paper["id"])
+        self.assertEqual([item["reference"]["source_question_number"] for item in comparison["items"]], [10, 11, 25, 10])
+        self.assertEqual([item["mapping_status"] for item in comparison["items"]], ["matched", "matched", "matched", "reused"])
+        question_comparison = self.service.get_question_seeds(paper["id"], "generated-4")
+        self.assertEqual(question_comparison["comparison_mode"], "reference")
+        self.assertEqual(question_comparison["reference"]["source_question_number"], 10)
 
     def test_seed_comparison_rejects_manual_questions_and_handles_missing_seed_records(self) -> None:
         paper = self.service.add_manual_question(

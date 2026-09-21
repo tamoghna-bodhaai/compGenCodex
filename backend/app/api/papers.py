@@ -154,6 +154,14 @@ def get_paper(paper_id: str) -> dict:
         _raise(error)
 
 
+@router.get("/{paper_id}/comparison")
+def get_paper_comparison(paper_id: str) -> dict:
+    try:
+        return PaperService().get_paper_comparison(paper_id)
+    except (PaperNotFoundError, PaperConflictError) as error:
+        _raise(error)
+
+
 @router.put("/{paper_id}")
 def update_paper(paper_id: str, request: PaperUpdateRequest) -> dict:
     try:

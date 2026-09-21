@@ -196,6 +196,10 @@ class GeneratedSlotResult(BaseModel):
     similarity_score: float
     validation: ValidationResult
     generation_attempt: int
+    reference_question_id: str | None = None
+    reference_question_index: int | None = None
+    reference_question_number: int | None = None
+    reference_reused: bool = False
 
 
 class GenerationResponse(BaseModel):

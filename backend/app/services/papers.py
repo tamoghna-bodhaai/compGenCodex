@@ -267,6 +267,9 @@ class PaperService:
         """
         question = self._ensure_question(paper_id, question_id)
         metadata = question.get("generation_metadata") or {}
+        reference_comparison = self._reference_comparison_for_question(paper_id, question, metadata)
+        if reference_comparison is not None:
+            return reference_comparison
         seed_ids = metadata.get("seed_question_ids")
         if metadata.get("origin") != "generated" or not isinstance(seed_ids, list) or not seed_ids:
             raise PaperConflictError("This question was not generated from recorded seed questions.")
@@ -279,10 +282,91 @@ class PaperService:
             rows = connection.execute(f"SELECT * FROM questions WHERE id IN ({placeholders})", ordered_ids).fetchall()
         by_id = {row["id"]: decode_question_row(row) for row in rows}
         return {
+            "comparison_mode": "seed_bank",
             "question": question,
             "generation_metadata": metadata,
             "seeds": [by_id[seed_id] for seed_id in ordered_ids if seed_id in by_id],
             "missing_seed_question_ids": [seed_id for seed_id in ordered_ids if seed_id not in by_id],
+        }
+
+    @staticmethod
+    def _reference_snapshot(config: dict, reference_index: int | None, reference_id: str | None = None) -> dict | None:
+        references = config.get("reference_questions")
+        if not isinstance(references, list):
+            return None
+        selected: dict | None = None
+        if reference_index is not None and 0 <= reference_index < len(references):
+            candidate = references[reference_index]
+            if isinstance(candidate, dict):
+                selected = candidate
+        if selected is None and reference_id:
+            selected = next((item for item in references if isinstance(item, dict) and item.get("reference_question_id") == reference_id), None)
+        return dict(selected) if selected is not None else None
+
+    def _reference_comparison_for_question(self, paper_id: str, question: dict, metadata: dict) -> dict | None:
+        mapping = metadata.get("reference_mapping")
+        if not isinstance(mapping, dict):
+            return None
+        paper = self.get(paper_id)
+        reference = self._reference_snapshot(
+            paper.get("generation_config") or {},
+            mapping.get("reference_question_index"),
+            mapping.get("reference_question_id"),
+        )
+        return {
+            "comparison_mode": "reference",
+            "question": question,
+            "generation_metadata": metadata,
+            "reference": reference,
+            "reference_mapping": mapping,
+            "seeds": [],
+            "missing_seed_question_ids": [],
+        }
+
+    def get_paper_comparison(self, paper_id: str) -> dict:
+        paper = self.get(paper_id)
+        config = paper.get("generation_config") or {}
+        references = config.get("reference_questions")
+        if not isinstance(references, list) or not references:
+            raise PaperConflictError("This paper was not generated from an uploaded reference paper.")
+
+        items: list[dict] = []
+        for generated_position, question in enumerate(paper.get("questions") or [], start=1):
+            metadata = question.get("generation_metadata") or {}
+            if metadata.get("origin") != "generated":
+                continue
+            mapping = metadata.get("reference_mapping")
+            if not isinstance(mapping, dict):
+                items.append({
+                    "generated_question": question,
+                    "generated_position": generated_position,
+                    "reference": None,
+                    "reference_mapping": None,
+                    "mapping_status": "unavailable",
+                })
+                continue
+            reference = self._reference_snapshot(
+                config,
+                mapping.get("reference_question_index"),
+                mapping.get("reference_question_id"),
+            )
+            status = "unavailable" if reference is None else ("reused" if mapping.get("reference_reused") else "matched")
+            items.append({
+                "generated_question": question,
+                "generated_position": generated_position,
+                "reference": reference,
+                "reference_mapping": mapping,
+                "mapping_status": status,
+            })
+
+        return {
+            "comparison_mode": "reference",
+            "paper_id": paper_id,
+            "title": paper["title"],
+            "reference_filter": config.get("reference_filter_formatted") or None,
+            "reference_count": len(references),
+            "generated_count": len(items),
+            "items": items,
         }
 
     @staticmethod
@@ -360,6 +444,25 @@ class PaperService:
 
         if not reference_questions:
             raise PaperConflictError("No reference questions could be extracted from the upload.")
+
+        # Snapshot the selected originals before generation. Preserve source
+        # numbering even when the selection starts at Q10 or contains gaps.
+        normalized_references: list[dict] = []
+        for selection_index, original in enumerate(reference_questions):
+            reference = dict(original)
+            source_number = reference.get("source_question_number")
+            try:
+                source_number = int(source_number) if source_number is not None else None
+            except (TypeError, ValueError):
+                source_number = None
+            reference["source_question_number"] = source_number
+            reference["reference_question_id"] = reference.get("reference_question_id") or (
+                f"reference-{selection_index + 1}-q-{source_number or selection_index + 1}"
+            )
+            reference["reference_selection_index"] = selection_index
+            reference["reference_source_position"] = selection_index + 1
+            normalized_references.append(reference)
+        reference_questions = normalized_references
 
         # If exam/subject not provided, infer from most common reference
         if not exam:
@@ -749,11 +852,23 @@ class PaperService:
         service = generation_service or GenerationService()
         for question_id in question_ids:
             current = current_by_id[question_id]
-            result = await service.generate_slot(
-                request,
-                GenerationSlot(slot=current["position"], question_type=current["question_type"], difficulty=current["difficulty"]),
-                custom_instruction=(custom_instruction or "").strip() or None,
-            )
+            slot = GenerationSlot(slot=current["position"], question_type=current["question_type"], difficulty=current["difficulty"])
+            reference_questions = paper["generation_config"].get("reference_questions")
+            if reference_questions:
+                response = await service.generate_from_reference(
+                    request,
+                    reference_questions=reference_questions,
+                    reference_images=paper["generation_config"].get("reference_images"),
+                    custom_instruction=(custom_instruction or "").strip() or paper["generation_config"].get("reference_custom_instruction") or None,
+                    slots=[slot],
+                )
+                result = response.slots[0]
+            else:
+                result = await service.generate_slot(
+                    request,
+                    slot,
+                    custom_instruction=(custom_instruction or "").strip() or None,
+                )
             self._store_generated_result(paper_id, result, replace_question_id=question_id, section_id=current["section_id"], position=current["position"])
         return self.get(paper_id)
 
@@ -826,6 +941,13 @@ class PaperService:
             "generation_attempt": result.generation_attempt,
             "validation": result.validation.model_dump(),
         }
+        if result.reference_question_id is not None:
+            metadata["reference_mapping"] = {
+                "reference_question_id": result.reference_question_id,
+                "reference_question_index": result.reference_question_index,
+                "source_question_number": result.reference_question_number,
+                "reference_reused": result.reference_reused,
+            }
         with get_connection() as connection:
             if replace_question_id:
                 connection.execute(

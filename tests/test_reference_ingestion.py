@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT_DIR / "backend"))
 
 from app.services.ingestion import ExtractedSource
 from app.services.reference import _extract_document_text, _is_docx, _is_pdf, extract_reference_questions
+from app.services.reference_filter import format_filter, parse_reference_filter
 
 
 CLASSIFIED_RESPONSE = {
@@ -38,6 +39,14 @@ CLASSIFIED_RESPONSE = {
 
 
 class ReferenceIngestionTests(unittest.IsolatedAsyncioTestCase):
+    def test_reference_filter_supports_disjoint_ranges_without_renumbering(self) -> None:
+        selected = parse_reference_filter("generate from qs 10-20 & 25-30")
+        self.assertIsNotNone(selected)
+        self.assertEqual(min(selected), 10)
+        self.assertEqual(max(selected), 30)
+        self.assertEqual(len(selected), 17)
+        self.assertEqual(format_filter(selected), "10-20,25-30")
+
     def test_document_type_detection_accepts_common_browser_mime_types(self) -> None:
         self.assertTrue(_is_pdf("reference", "application/x-pdf"))
         self.assertTrue(_is_pdf("reference.pdf", "application/octet-stream"))

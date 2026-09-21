@@ -120,6 +120,8 @@ export interface GenerationConfig {
   generation_mode: GenerationMode;
   variation_strength: VariationStrength;
   subtopic_plans?: SubtopicPlanPayload[];
+  reference_questions?: ReferenceSnapshot[];
+  reference_filter_formatted?: string;
 }
 
 export interface PaperSummary {
@@ -177,10 +179,58 @@ export interface SeedQuestion {
 }
 
 export interface SeedComparison {
+  comparison_mode?: "seed_bank" | "reference";
   question: PaperQuestion;
   generation_metadata: Record<string, unknown>;
   seeds: SeedQuestion[];
   missing_seed_question_ids: string[];
+  reference?: ReferenceSnapshot | null;
+  reference_mapping?: ReferenceMapping | null;
+}
+
+export interface ReferenceSnapshot {
+  reference_question_id?: string;
+  reference_selection_index?: number;
+  reference_source_position?: number;
+  source_question_number?: number | null;
+  exam?: string | null;
+  subject?: string | null;
+  chapter?: string | null;
+  topic?: string | null;
+  subtopic?: string | null;
+  question_type: QuestionType;
+  difficulty: number;
+  stem: string;
+  options?: string[];
+  correct_answer?: string | null;
+  solution?: string | null;
+  primary_concept?: string | null;
+  question_archetype?: string | null;
+}
+
+export interface ReferenceMapping {
+  reference_question_id?: string;
+  reference_question_index?: number;
+  source_question_number?: number | null;
+  reference_reused?: boolean;
+}
+
+export interface PaperComparisonItem {
+  generated_question: PaperQuestion;
+  generated_position: number;
+  reference: ReferenceSnapshot | null;
+  reference_mapping: ReferenceMapping | null;
+  mapping_status: "matched" | "reused" | "unavailable";
+}
+
+export interface PaperComparison {
+  comparison_mode: "reference";
+  paper_id: string;
+  title: string;
+  reference_filter: string | null;
+  reference_count: number;
+  generated_count: number;
+  items: PaperComparisonItem[];
 }
 
 export interface BrandingProfile {

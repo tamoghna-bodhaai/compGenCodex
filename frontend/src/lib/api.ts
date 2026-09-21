@@ -7,6 +7,7 @@ import type {
   SeedQuestion,
   SeedComparison,
   PaperExport,
+  PaperComparison,
 } from "@/lib/types";
 
 export class ApiError extends Error {
@@ -61,6 +62,7 @@ export const api = {
   papers: (signal?: AbortSignal) => apiRequest<{ items: PaperSummary[] }>("/papers", { signal }),
   paper: (id: string) => apiRequest<Paper>(`/papers/${id}`),
   paperQuestionSeeds: (paperId: string, questionId: string) => apiRequest<SeedComparison>(`/papers/${paperId}/questions/${questionId}/seeds`),
+  paperComparison: (paperId: string) => apiRequest<PaperComparison>(`/papers/${paperId}/comparison`),
   createPaper: (body: unknown) => apiRequest<Paper>("/papers", { method: "POST", body: JSON.stringify(body) }),
   updatePaper: (id: string, body: unknown) => apiRequest<Paper>(`/papers/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deletePaper: (id: string) => apiRequest<void>(`/papers/${id}`, { method: "DELETE" }),

@@ -35,4 +35,11 @@ describe("apiRequest", () => {
     await api.paperQuestionSeeds("paper-1", "question-2");
     expect(fetchMock).toHaveBeenCalledWith("/api/papers/paper-1/questions/question-2/seeds", expect.any(Object));
   });
+
+  it("loads the persisted reference comparison for a paper", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const { api } = await import("@/lib/api");
+    await api.paperComparison("paper-1");
+    expect(fetchMock).toHaveBeenCalledWith("/api/papers/paper-1/comparison", expect.any(Object));
+  });
 });
