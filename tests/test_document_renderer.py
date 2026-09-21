@@ -126,6 +126,19 @@ class DocumentRendererTests(unittest.TestCase):
         self.assertAlmostEqual(question_document.sections[0].page_width, 7560000, delta=500)  # A4 width in EMU
         self.assertAlmostEqual(question_document.sections[0].page_height, 10692000, delta=500)  # A4 height in EMU
 
+    def test_archive_suffix_preserves_previous_export(self) -> None:
+        paper = PaperService().get(self.paper["id"])
+        renderer = PaperDocumentRenderer(Path(self.tmp.name) / "exports")
+        first, _ = renderer.export(
+            paper, output_format=ExportFormat.DOCX, variant=ExportVariant.ANSWER_KEY, archive_suffix="previous123",
+        )
+        second, _ = renderer.export(
+            paper, output_format=ExportFormat.DOCX, variant=ExportVariant.ANSWER_KEY, archive_suffix="current456",
+        )
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.exists())
+        self.assertTrue(second.exists())
+
     def test_answer_key_keeps_solution_working_on_separate_steps(self) -> None:
         PaperService().add_manual_question(
             self.paper["id"],

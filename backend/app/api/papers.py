@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 
@@ -332,7 +334,15 @@ def export_paper(paper_id: str, request: PaperExportRequest) -> FileResponse:
         template_id = request.branding_template_id if request.branding_template_id is not None else paper.get("branding_template_id")
         resolved_branding = BrandingProfileService().resolve(template_id, paper.get("branding_config"))
         paper["branding_config"] = {**resolved_branding, **(request.branding_overrides or {})}
-        path, media_type = PaperDocumentRenderer().export(paper, output_format=request.format, variant=request.variant)
+        path, media_type = PaperDocumentRenderer().export(
+            paper,
+            output_format=request.format,
+            variant=request.variant,
+            # Every download is immutable once archived. A fresh suffix avoids
+            # overwriting a previously registered export when the paper or its
+            # renderer changes and preserves existing download links.
+            archive_suffix=uuid.uuid4().hex[:12],
+        )
         register_export(path=path, media_type=media_type, paper_id=paper_id)
         return FileResponse(path, media_type=media_type, filename=path.name)
     except (PaperNotFoundError, DocumentRenderError) as error:

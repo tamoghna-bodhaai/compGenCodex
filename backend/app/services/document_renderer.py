@@ -622,13 +622,24 @@ class PaperDocumentRenderer:
         configured = os.getenv("EXPORT_ROOT")
         self.output_root = output_root or (Path(configured) if configured else Path(__file__).resolve().parents[3] / "output" / "exports")
 
-    def export(self, paper: dict[str, Any], *, output_format: ExportFormat, variant: ExportVariant) -> tuple[Path, str]:
+    def export(
+        self,
+        paper: dict[str, Any],
+        *,
+        output_format: ExportFormat,
+        variant: ExportVariant,
+        archive_suffix: str | None = None,
+    ) -> tuple[Path, str]:
         if not paper["questions"]:
             raise DocumentRenderError("Add at least one question before exporting this paper.")
         self.output_root.mkdir(parents=True, exist_ok=True)
         variant_suffix = "answerkey" if variant == ExportVariant.ANSWER_KEY else "question"
         title = self._safe_filename(str(paper["title"]))
         stem = f"{title[: 120 - len(variant_suffix) - 1]}_{variant_suffix}"
+        if archive_suffix:
+            safe_suffix = re.sub(r"[^A-Za-z0-9_-]+", "", archive_suffix)[:24]
+            if safe_suffix:
+                stem = f"{stem[: 120 - len(safe_suffix) - 1]}_{safe_suffix}"
         if output_format == ExportFormat.DOCX:
             docx_path = self.output_root / f"{stem}.docx"
             self._build_docx(paper, variant, docx_path)
