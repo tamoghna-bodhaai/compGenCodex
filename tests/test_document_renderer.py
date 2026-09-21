@@ -9,7 +9,7 @@ from docx import Document
 
 from app.schemas.generation import DifficultyCount, GenerationMode, QuestionType, QuestionTypeCount, VariationStrength
 from app.schemas.papers import AddManualQuestionRequest, ExportFormat, ExportVariant, PaperCreateRequest, PaperUpdateRequest
-from app.services.document_renderer import PaperDocumentRenderer, latex_to_readable
+from app.services.document_renderer import PaperDocumentRenderer, answer_to_readable, latex_to_readable
 from app.services.papers import PaperService
 
 
@@ -62,6 +62,30 @@ class DocumentRendererTests(unittest.TestCase):
         self.assertNotIn("frac", latex_to_readable("$\\frac1c\\int_a^b f\\left(\\frac{x}{c}\\right)dx$"))
         self.assertNotIn("\\", rendered)
         self.assertNotIn("$", rendered)
+
+    def test_answer_key_uses_portable_text_not_office_math_cells(self) -> None:
+        PaperService().add_manual_question(
+            self.paper["id"],
+            AddManualQuestionRequest(
+                question_type=QuestionType.SINGLE_CORRECT,
+                stem="Find the value.", options=["A", "B", "C", "D"],
+                correct_answer=r"$\\boxed{\\frac{2}{3}}$", solution=None,
+                difficulty=2, marks=4, primary_concept="portable answer rendering",
+            ),
+        )
+        paper = PaperService().get(self.paper["id"])
+        renderer = PaperDocumentRenderer(Path(self.tmp.name) / "exports")
+        path, _ = renderer.export(paper, output_format=ExportFormat.DOCX, variant=ExportVariant.ANSWER_KEY)
+        document = Document(path)
+        answer_cells = [row.cells[1] for row in document.tables[0].rows[1:]]
+        self.assertTrue(all("<m:oMath>" not in cell._tc.xml for cell in answer_cells))
+        self.assertIn("(2)/(3)", answer_cells[-1].text)
+        source = renderer._latex_source(paper, ExportVariant.ANSWER_KEY)
+        self.assertIn(r"\(\displaystyle \boxed{\frac{2}{3}}\)", source)
+
+    def test_answer_key_unwraps_visual_latex_wrappers(self) -> None:
+        self.assertEqual(answer_to_readable(r"$\\boxed{\\frac{2}{3}}$"), "(2)/(3)")
+        self.assertEqual(answer_to_readable(r"2.83\\,\\mathrm{N\\cdot m}"), "2.83 N·m")
 
     def test_question_paper_and_answer_key_export(self) -> None:
         paper = PaperService().get(self.paper["id"])

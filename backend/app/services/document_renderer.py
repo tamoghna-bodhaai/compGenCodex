@@ -176,6 +176,35 @@ def latex_to_readable(value: str) -> str:
     return _xml_safe_text(re.sub(r"\s+", " ", value).strip())
 
 
+def _unwrap_latex_command(value: str, command: str) -> str:
+    """Remove a one-argument visual wrapper while retaining its content."""
+    cursor = 0
+    while (start := value.find(command, cursor)) >= 0:
+        group = _braced_group(value, start + len(command))
+        if group is None:
+            cursor = start + len(command)
+            continue
+        value = value[:start] + group[0] + value[group[1]:]
+        cursor = start
+    return value
+
+
+def answer_to_readable(value: Any) -> str:
+    """Return an answer-key value that works in Word, LibreOffice, and PDF.
+
+    Answer-table cells are deliberately plain text rather than OMML.  LibreOffice
+    can silently discard small inline OMML objects during headless conversion,
+    leaving a blank answer in both its DOCX preview and the generated PDF.
+    """
+    text = _normalize_latex(str(value or ""))
+    text = _unwrap_latex_command(text, "\\boxed")
+    text = _unwrap_latex_command(text, "\\fbox")
+    for command in ("\\mathrm", "\\mathit", "\\mathbf", "\\text", "\\operatorname"):
+        text = _unwrap_latex_command(text, command)
+    text = text.replace("\\displaystyle", "").replace("\\textstyle", "")
+    return re.sub(r"([·×])\s+", r"\1", latex_to_readable(text))
+
+
 MathNode = tuple[Any, ...]
 
 
@@ -952,7 +981,10 @@ class PaperDocumentRenderer:
             answer_cell = row[1]
             _set_cell_padding(answer_cell)
             answer_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            _append_latex_content(answer_cell.paragraphs[0], str(answer))
+            # Do not use OMML in answer-table cells.  LibreOffice's headless
+            # converter can drop inline OMML here, producing blank answers in
+            # the downloaded DOCX and in its PDF fallback.
+            answer_cell.paragraphs[0].add_run(answer_to_readable(answer))
             for index, value in ((0, values[0]), (2, values[1]), (3, values[2])):
                 cell = row[index]
                 cell.text = value
@@ -982,6 +1014,21 @@ class PaperDocumentRenderer:
         # Generation pipelines emit \(...\) / \[...\] which LaTeX understands
         # natively; bare \(...\) inside $...$ would break, so keep as-is.
         return text
+
+    @staticmethod
+    def _latex_answer(value: Any) -> str:
+        """Make every answer a valid inline math expression for the PDF table.
+
+        Generated answers are sometimes bare LaTex (for example
+        ``2.83\\,N\\cdot m``) rather than dollar-delimited.  A bare ``\\frac`` or
+        ``\\cdot`` in a tabular cell causes pdflatex to fail, which previously
+        sent Railway to the lossy DOCX-to-PDF fallback.
+        """
+        text = _normalize_latex(str(value or ""))
+        text = text.replace("$$", "").replace("$", "")
+        text = text.replace("\\(", "").replace("\\)", "")
+        text = text.replace("\\[", "").replace("\\]", "")
+        return rf"\(\displaystyle {text}\)"
 
     def _build_pdf_via_latex(self, paper: dict[str, Any], variant: ExportVariant, stem: str) -> Path:
         pdflatex = shutil.which("pdflatex")
@@ -1122,7 +1169,7 @@ class PaperDocumentRenderer:
                 answer = (question.get("answer_json") or {}).get("correct_answer") or "Not verified"
                 concept = self._latex_escape(str(payload.get("primary_concept") or ""))
                 marks_q = self._latex_escape(str(payload.get("marks") or ""))
-                answer_tex = self._latex_math(answer)
+                answer_tex = self._latex_answer(answer)
                 lines.append(rf"{number} & {answer_tex} & {marks_q} & {concept} \\\hline")
             lines.append(r"\end{tabularx}")
             lines.append("")
