@@ -123,6 +123,11 @@ local checks highly parallel. Tune `GENERATION_BURST_CONCURRENCY`,
 reject malformed drafts; they do not replace the independent validator for
 mathematical correctness or wording ambiguity.
 
+Set `GENERATION_FALLBACK_MODEL` and/or `VALIDATION_FALLBACK_MODEL` to add a
+second generation phase for failed slots. Only after the primary pipeline has
+exhausted `MAX_GENERATION_ATTEMPTS` does it retry those slots with the fallback
+model(s); an omitted fallback keeps its corresponding primary model.
+
 ## Ingesting question sets
 
 Open **Question bank** and choose **Ingest questions**. Upload one PDF or DOCX (up to 35 MB), or paste question text, then optionally add classification guidance such as `Treat this as JEE Mathematics, Class 12`. The upload queues a persisted ingestion job, with live extraction, classification, and saving status in the modal and dashboard. The backend extracts embedded PDF text first and uses local Tesseract OCR for scanned PDFs when needed, then asks OpenRouter to faithfully transcribe and classify each question as JEE/NEET, subject, chapter, topic/subtopic, type, and difficulty. Imported items are marked `pending_review`; missing answers or unclear text are not invented.

@@ -56,6 +56,7 @@ async def create_from_reference(
     title: str = Form(default=""),
     desired_count: int = Form(default=5),
     custom_instruction: str = Form(default=""),
+    generation_mode: str = Form(default="structural_variation"),
     variation_strength: str = Form(default="balanced"),
     exam: str = Form(default=""),
     subject: str = Form(default=""),
@@ -114,7 +115,6 @@ async def create_from_reference(
             reference_questions = filtered
 
         # Allow caller to override count with actual extracted count if they sent 0? Already handled
-        # Reuse STRUCTURAL mode via create_reference_paper
         paper_title = title.strip() or f"Reference — {filename[:40]}"
         paper = PaperService().create_reference_paper(
             title=paper_title,
@@ -124,6 +124,7 @@ async def create_from_reference(
             reference_images=reference_images,
             custom_instruction=custom_instruction,
             desired_count=desired_count,
+            generation_mode=generation_mode,
             variation_strength=variation_strength,
             reference_filter_raw=raw_filter if effective is not None else "",
             reference_filter_formatted=format_filter(effective) if effective is not None else "",

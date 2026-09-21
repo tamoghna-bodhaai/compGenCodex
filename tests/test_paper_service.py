@@ -333,6 +333,7 @@ class PaperServiceTests(unittest.TestCase):
             reference_images=[],
             custom_instruction="",
             desired_count=4,
+            generation_mode="concept_variation",
             reference_filter_raw="10-11 & 25",
             reference_filter_formatted="10-11,25",
         )
@@ -340,6 +341,7 @@ class PaperServiceTests(unittest.TestCase):
         snapshot = reloaded["generation_config"]["reference_questions"]
         self.assertEqual([item["source_question_number"] for item in snapshot], [10, 11, 25])
         self.assertEqual(reloaded["generation_config"]["reference_filter_formatted"], "10-11,25")
+        self.assertEqual(reloaded["generation_config"]["generation_mode"], "concept_variation")
 
         now = "2026-09-21T00:00:00+00:00"
         with get_connection() as connection:

@@ -74,7 +74,7 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
     <Dialog
       open={open}
       title="Generate from reference"
-      subtitle="Upload a picture or short paper — get structural variations instantly. Reuses structural mode & saved to history."
+      subtitle="Upload a picture or short paper — generate variations and save them to history."
       onClose={onClose}
       footer={<div className={s.modalActions}><Button type="button" onClick={onClose}>Cancel</Button><Button tone="primary" type="submit" form={formId} disabled={submitting}>{submitting ? "Uploading & extracting…" : "Generate"}</Button></div>}
     >
@@ -88,9 +88,15 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
           <Field label="Paper title (optional)">
             <Input name="title" placeholder="e.g. JEE Mains — Waves variation" />
           </Field>
+          <Field label="Desired number of questions (no cap)">
+            <Input name="desired_count" type="number" min={1} max={200} defaultValue={5} required />
+          </Field>
           <div className={s.referenceFields}>
-            <Field label="Desired number of questions (no cap)">
-              <Input name="desired_count" type="number" min={1} max={200} defaultValue={5} required />
+            <Field label="Variation mode">
+              <select className={s.input} name="generation_mode" defaultValue="structural_variation">
+                <option value="structural_variation">Structural variation</option>
+                <option value="concept_variation">Concept variation</option>
+              </select>
             </Field>
             <Field label="Variation strength">
               <select className={s.input} name="variation_strength" defaultValue="balanced">
@@ -113,7 +119,7 @@ export function ReferenceReadyReckoner({ open, onClose, onSubmissionChange }: { 
           <Field label="Subject (optional, auto-detected if blank)">
             <Input name="subject" placeholder="Physics / Mathematics / Chemistry" />
           </Field>
-          <p className={s.muted}>Reuses <strong>structural variation</strong> mode. Generates without ingesting to DB first — ready reckoner, saved to paper history for export.</p>
+          <p className={s.muted}>Generates directly from the reference without ingesting it to the question bank first; the result is saved to paper history for export.</p>
         </form>
       </div>
     </Dialog>

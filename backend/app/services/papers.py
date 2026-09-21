@@ -431,13 +431,14 @@ class PaperService:
         reference_images: list[str],
         custom_instruction: str | None,
         desired_count: int,
+        generation_mode: str = "structural_variation",
         variation_strength: str = "balanced",
         reference_filter_raw: str = "",
         reference_filter_formatted: str = "",
     ) -> dict:
-        """Create a paper backed by reference image/paper for structural variation.
+        """Create a paper backed by a reference image or paper.
 
-        Reuses STRUCTURAL mode (per user request). No cap on desired_count.
+        Supports the standard structural and concept variation modes. No cap on desired_count.
         Stores reference_questions/images inside generation_config for background job.
         """
         from app.schemas.generation import GenerationMode, QuestionType, VariationStrength
@@ -501,7 +502,11 @@ class PaperService:
         question_types = [{"type": k, "count": v} for k, v in type_counter.items()]
         difficulty_distribution = [{"difficulty": k, "count": v} for k, v in diff_counter.items()]
 
-        # Validate variation_strength
+        # Validate generation settings.
+        try:
+            generation_mode = GenerationMode(generation_mode).value
+        except Exception:
+            generation_mode = GenerationMode.STRUCTURAL.value
         try:
             VariationStrength(variation_strength)
         except Exception:
@@ -517,7 +522,7 @@ class PaperService:
             "concepts": [],
             "question_types": question_types,
             "difficulty_distribution": difficulty_distribution,
-            "generation_mode": GenerationMode.STRUCTURAL.value,
+            "generation_mode": generation_mode,
             "variation_strength": variation_strength,
             "subtopic_plans": None,
             # Reference mode extension (preserved for job, not part of schema validation via extra="allow"?)

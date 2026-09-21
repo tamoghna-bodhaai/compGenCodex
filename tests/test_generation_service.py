@@ -20,10 +20,12 @@ from app.services.seed_import import upsert_seed_questions
 class FakeOpenRouterClient:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.models: list[str | None] = []
         self.prompts: list[str] = []
 
-    async def call_llm(self, *, system_prompt: str, user_prompt: str, **_: object) -> dict:
+    async def call_llm(self, *, system_prompt: str, user_prompt: str, model: str | None = None, **_: object) -> dict:
         self.calls.append(system_prompt)
+        self.models.append(model)
         self.prompts.append(user_prompt)
         if "assessment planner" in system_prompt:
             return {
@@ -101,6 +103,31 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 2)
         self.assertFalse(any("assessment planner" in call for call in client.calls))
 
+    def test_exhausted_primary_retries_use_generation_and_validation_fallbacks(self) -> None:
+        class PrimaryValidatorRejects(FakeOpenRouterClient):
+            async def call_llm(self, *, model: str | None = None, system_prompt: str, user_prompt: str, **kwargs: object) -> dict:
+                if model == "validator-primary":
+                    self.calls.append(system_prompt)
+                    self.models.append(model)
+                    self.prompts.append(user_prompt)
+                    return {
+                        "valid": False, "independent_answer": "B", "matches_generated_answer": False,
+                        "ambiguous": False, "multiple_answers_possible": False, "sufficient_information": True,
+                        "concept_match": True, "difficulty_match": True, "comments": "Primary validator rejected it.",
+                    }
+                return await super().call_llm(model=model, system_prompt=system_prompt, user_prompt=user_prompt, **kwargs)
+
+        settings = Settings(
+            "test", "generator-primary", "validator-primary", None, None, 3, 1, 0.90,
+            generation_fallback_model="generator-fallback", validation_fallback_model="validator-fallback",
+        )
+        client = PrimaryValidatorRejects()
+        result = asyncio.run(GenerationService(settings=settings, client=client).generate(request_for("structural_variation")))
+
+        self.assertEqual(len(result.slots), 1)
+        self.assertEqual(result.slots[0].generation_attempt, 2)
+        self.assertEqual(client.models, ["generator-primary", "validator-primary", "generator-fallback", "validator-fallback"])
+
     def test_reference_generation_keeps_ordered_mapping_and_marks_reuse(self) -> None:
         request = GenerationRequest.model_validate(
             {
@@ -121,6 +148,17 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertEqual([slot.reference_question_id for slot in result.slots], ["ref-q10", "ref-q11", "ref-q10"])
         self.assertEqual([slot.reference_question_number for slot in result.slots], [10, 11, 10])
         self.assertEqual([slot.reference_reused for slot in result.slots], [False, False, True])
+
+    def test_reference_generation_uses_the_requested_concept_variation_mode(self) -> None:
+        request = request_for("concept_variation")
+        references = [
+            {"reference_question_id": "ref-q1", "source_question_number": 1, "stem": "Original", "options": ["A", "B", "C", "D"], "question_type": "single_correct_mcq", "difficulty": 3},
+        ]
+        client = FakeOpenRouterClient()
+        result = asyncio.run(GenerationService(settings=self.settings, client=client).generate_from_reference(request, references))
+
+        self.assertEqual(result.generation_mode.value, "concept_variation")
+        self.assertTrue(any("assessment planner" in call for call in client.calls))
 
     def test_concept_pipeline_builds_blueprint_before_generation(self) -> None:
         client = FakeOpenRouterClient()

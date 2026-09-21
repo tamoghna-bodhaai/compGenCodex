@@ -40,6 +40,7 @@ class _Candidate:
     seeds: list[RetrievalCandidate]
     similarity: float
     attempt: int
+    generation_model: str | None = None
     reference_question_id: str | None = None
     reference_question_index: int | None = None
     reference_question_number: int | None = None
@@ -106,27 +107,32 @@ class GenerationService:
         # deterministic checks second, and independent LLM validation last.
         # Only failed slots re-enter a later round, so one bad draft never
         # cancels the rest of the paper.
-        for attempt in range(1, self.settings.max_generation_attempts + 1):
+        attempt = 0
+        for generation_model, validation_model in self._model_phases():
+            for _ in range(self.settings.max_generation_attempts):
+                if not pending:
+                    break
+                attempt += 1
+                candidates, failures = await self._generate_candidates(request, pending, attempt, before_slot, custom_instruction, generation_model)
+                candidates, local_failures = await self._deterministically_validate(request, candidates)
+                failures.update(local_failures)
+                validated, validation_failures = await self._llm_validate(request, candidates, validation_model)
+                failures.update(validation_failures)
+
+                for result in validated:
+                    results.append(result)
+                    if on_slot_complete:
+                        notification = on_slot_complete(result)
+                        if notification is not None:
+                            await notification
+                pending = [slot for slot in pending if slot.slot in failures]
             if not pending:
                 break
-            candidates, failures = await self._generate_candidates(request, pending, attempt, before_slot, custom_instruction)
-            candidates, local_failures = await self._deterministically_validate(request, candidates)
-            failures.update(local_failures)
-            validated, validation_failures = await self._llm_validate(request, candidates)
-            failures.update(validation_failures)
-
-            for result in validated:
-                results.append(result)
-                if on_slot_complete:
-                    notification = on_slot_complete(result)
-                    if notification is not None:
-                        await notification
-            pending = [slot for slot in pending if slot.slot in failures]
-            if pending and attempt == self.settings.max_generation_attempts:
-                failed_slot = pending[0]
-                raise GenerationFailure(
-                    f"Generation failed for question slot {failed_slot.slot} after {attempt} attempts: {failures[failed_slot.slot]}"
-                )
+        if pending:
+            failed_slot = pending[0]
+            raise GenerationFailure(
+                f"Generation failed for question slot {failed_slot.slot} after {attempt} attempts across primary and fallback models: {failures[failed_slot.slot]}"
+            )
         results.sort(key=lambda result: result.slot.slot)
         return GenerationResponse(title=request.title, generation_mode=request.generation_mode, slots=results)
 
@@ -144,11 +150,11 @@ class GenerationService:
         slots: list[GenerationSlot] | None = None,
         before_slot: Callable[[GenerationSlot], Awaitable[None] | None] | None = None,
     ) -> GenerationResponse:
-        """Generate structural variations directly from reference image/paper without DB retrieval.
+        """Generate variations directly from a reference image or paper without DB retrieval.
 
         reference_questions: list of dicts with stem/options/question_type/difficulty/primary_concept etc.
         reference_images: base64 data URLs for visual grounding (forwarded to LLM).
-        Reuses STRUCTURAL mode regardless of request.generation_mode.
+        Uses the request's variation mode, just like question-bank generation.
         """
         if not self.settings.generation_ready:
             raise ModelConfigurationError(
@@ -161,32 +167,36 @@ class GenerationService:
 
         # Build synthetic RetrievalCandidate-like dicts for logging/similarity
         # We bypass real retrieval and inject reference seeds per slot
-        for attempt in range(1, self.settings.max_generation_attempts + 1):
+        attempt = 0
+        for generation_model, validation_model in self._model_phases():
+            for _ in range(self.settings.max_generation_attempts):
+                if not pending:
+                    break
+                attempt += 1
+                candidates, failures = await self._generate_candidates_from_reference(
+                    request, pending, attempt, before_slot, custom_instruction, reference_questions, reference_images, generation_model
+                )
+                candidates, local_failures = await self._deterministically_validate(request, candidates)
+                failures.update(local_failures)
+                validated, validation_failures = await self._llm_validate(request, candidates, validation_model)
+                failures.update(validation_failures)
+
+                for result in validated:
+                    results.append(result)
+                    if on_slot_complete:
+                        notification = on_slot_complete(result)
+                        if notification is not None:
+                            await notification
+                pending = [slot for slot in pending if slot.slot in failures]
             if not pending:
                 break
-            candidates, failures = await self._generate_candidates_from_reference(
-                request, pending, attempt, before_slot, custom_instruction, reference_questions, reference_images
+        if pending:
+            failed_slot = pending[0]
+            raise GenerationFailure(
+                f"Reference generation failed for slot {failed_slot.slot} after {attempt} attempts across primary and fallback models: {failures[failed_slot.slot]}"
             )
-            candidates, local_failures = await self._deterministically_validate(request, candidates)
-            failures.update(local_failures)
-            validated, validation_failures = await self._llm_validate(request, candidates)
-            failures.update(validation_failures)
-
-            for result in validated:
-                results.append(result)
-                if on_slot_complete:
-                    notification = on_slot_complete(result)
-                    if notification is not None:
-                        await notification
-            pending = [slot for slot in pending if slot.slot in failures]
-            if pending and attempt == self.settings.max_generation_attempts:
-                failed_slot = pending[0]
-                raise GenerationFailure(
-                    f"Reference generation failed for slot {failed_slot.slot} after {attempt} attempts: {failures[failed_slot.slot]}"
-                )
         results.sort(key=lambda result: result.slot.slot)
-        # Force structural mode for response title
-        return GenerationResponse(title=request.title, generation_mode=GenerationMode.STRUCTURAL, slots=results)
+        return GenerationResponse(title=request.title, generation_mode=request.generation_mode, slots=results)
 
     async def _generate_candidates_from_reference(
         self,
@@ -197,6 +207,7 @@ class GenerationService:
         custom_instruction: str | None,
         reference_questions: list[dict],
         reference_images: list[str] | None,
+        generation_model: str,
     ) -> tuple[list[_Candidate], dict[int, str]]:
         semaphore = asyncio.Semaphore(self.settings.generation_burst_concurrency)
 
@@ -270,7 +281,7 @@ class GenerationService:
                     # Tag for prompt image hint
                     if reference_images:
                         effective_instruction = f"[reference image attached] {effective_instruction}"
-                    question = await self._generate_question(request, slot, seeds, effective_instruction, reference_images)
+                    question = await self._generate_question(request, slot, seeds, effective_instruction, reference_images, generation_model)
                     similarity = max_seed_similarity(question, seeds)  # against synthetic
                     # For reference mode we relax similarity check (allow close)
                     return _Candidate(
@@ -278,10 +289,10 @@ class GenerationService:
                         reference_question_id=reference_id,
                         reference_question_index=reference_index,
                         reference_question_number=source_number,
-                        reference_reused=slot.slot > len(reference_questions),
+                        reference_reused=slot.slot > len(reference_questions), generation_model=generation_model,
                     )  # type: ignore
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
-                self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error))
+                self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error), model=generation_model)
                 raise
 
         return await self._collect(slots, produce)
@@ -293,6 +304,7 @@ class GenerationService:
         attempt: int,
         before_slot: Callable[[GenerationSlot], Awaitable[None] | None] | None,
         custom_instruction: str | None,
+        generation_model: str,
     ) -> tuple[list[_Candidate], dict[int, str]]:
         semaphore = asyncio.Semaphore(self.settings.generation_burst_concurrency)
 
@@ -308,13 +320,13 @@ class GenerationService:
                         if notification is not None:
                             await notification
                     seeds = self.retriever.retrieve(request, slot)
-                    question = await self._generate_question(request, slot, seeds, custom_instruction)
+                    question = await self._generate_question(request, slot, seeds, custom_instruction, generation_model=generation_model)
                     similarity = max_seed_similarity(question, seeds)
                     if request.generation_mode == GenerationMode.CONCEPT and similarity > self.settings.max_seed_similarity:
                         raise GenerationFailure(f"Generated question is too similar to its seed pool ({similarity:.2f}).")
-                    return _Candidate(slot, question, seeds, similarity, attempt)
+                    return _Candidate(slot, question, seeds, similarity, attempt, generation_model)
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
-                self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error))
+                self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error), model=generation_model)
                 raise
 
         return await self._collect(slots, produce)
@@ -328,21 +340,21 @@ class GenerationService:
             async with semaphore:
                 failure = _deterministic_failure(candidate.question, candidate.slot)
                 if failure:
-                    self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=failure)
+                    self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=failure, model=candidate.generation_model)
                     raise GenerationFailure(failure)
                 return candidate
 
         return await self._collect(candidates, check, key=lambda candidate: candidate.slot)
 
     async def _llm_validate(
-        self, request: GenerationRequest, candidates: list[_Candidate]
+        self, request: GenerationRequest, candidates: list[_Candidate], validation_model: str
     ) -> tuple[list[GeneratedSlotResult], dict[int, str]]:
         semaphore = asyncio.Semaphore(self.settings.validation_burst_concurrency)
 
         async def validate(candidate: _Candidate) -> GeneratedSlotResult:
             try:
                 async with semaphore:
-                    validation = await self._validate(candidate.question, request, candidate.slot)
+                    validation = await self._validate(candidate.question, request, candidate.slot, validation_model)
                 if not validation.valid or not self._validation_matches_requirements(validation):
                     raise GenerationFailure(validation.comments or "Independent validation failed.")
                 result = GeneratedSlotResult(
@@ -357,10 +369,10 @@ class GenerationService:
                     reference_question_number=candidate.reference_question_number,
                     reference_reused=candidate.reference_reused,
                 )
-                self._log(request, result=result, status="validated")
+                self._log(request, result=result, status="validated", model=candidate.generation_model)
                 return result
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
-                self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=safe_error_message(error))
+                self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=safe_error_message(error), model=validation_model)
                 raise
 
         return await self._collect(candidates, validate, key=lambda candidate: candidate.slot)
@@ -380,28 +392,45 @@ class GenerationService:
                 successes.append(outcome)
         return successes, failures
 
+    def _model_phases(self) -> list[tuple[str, str]]:
+        """Return the primary phase and, when configured, one fallback phase."""
+        primary = (self.settings.generation_model, self.settings.validation_model)
+        assert primary[0] and primary[1]  # guarded by generation_ready
+        fallback = (
+            self.settings.generation_fallback_model or primary[0],
+            self.settings.validation_fallback_model or primary[1],
+        )
+        return [primary] if fallback == primary else [primary, fallback]
+
     async def generate_solution(self, question: dict, *, exam: str, subject: str) -> GeneratedSolution:
         if not self.settings.generation_ready:
             raise ModelConfigurationError(
                 "Generation is not configured. Set OPENROUTER_API_KEY, GENERATION_MODEL, and VALIDATION_MODEL before generating solutions."
             )
-        raw = await self.client.call_llm(
-            model=self.settings.validation_model,
-            system_prompt=solution.SYSTEM_PROMPT,
-            user_prompt=solution.build_prompt(question=question, exam=exam, subject=subject),
-            response_schema=_schema(GeneratedSolution),
-            temperature=0.1,
-            max_tokens=1800,
-        )
-        return GeneratedSolution.model_validate(raw)
+        last_error: Exception | None = None
+        for _, validation_model in self._model_phases():
+            try:
+                raw = await self.client.call_llm(
+                    model=validation_model,
+                    system_prompt=solution.SYSTEM_PROMPT,
+                    user_prompt=solution.build_prompt(question=question, exam=exam, subject=subject),
+                    response_schema=_schema(GeneratedSolution),
+                    temperature=0.1,
+                    max_tokens=1800,
+                )
+                return GeneratedSolution.model_validate(raw)
+            except (OpenRouterError, ValidationError) as error:
+                last_error = error
+        assert last_error is not None
+        raise last_error
 
-    async def _generate_question(self, request: GenerationRequest, slot: GenerationSlot, seeds: list[RetrievalCandidate], custom_instruction: str | None = None, reference_images: list[str] | None = None) -> GeneratedQuestion:
+    async def _generate_question(self, request: GenerationRequest, slot: GenerationSlot, seeds: list[RetrievalCandidate], custom_instruction: str | None = None, reference_images: list[str] | None = None, generation_model: str | None = None) -> GeneratedQuestion:
         seed_payload = [seed.prompt_payload() for seed in seeds]
         mode = slot.generation_mode or request.generation_mode
         strength = slot.variation_strength or request.variation_strength
         if mode == GenerationMode.STRUCTURAL:
             raw = await self.client.call_llm(
-                model=self.settings.generation_model,
+                model=generation_model or self.settings.generation_model,
                 system_prompt=structural_variation.SYSTEM_PROMPT,
                 user_prompt=structural_variation.build_prompt(
                     seeds=seed_payload, target_type=slot.question_type.value, difficulty=slot.difficulty,
@@ -412,7 +441,7 @@ class GenerationService:
             )
         else:
             blueprint_raw = await self.client.call_llm(
-                model=self.settings.generation_model,
+                model=generation_model or self.settings.generation_model,
                 system_prompt=concept_blueprint.SYSTEM_PROMPT,
                 user_prompt=concept_blueprint.build_prompt(
                     seeds=seed_payload, requested_concepts=request.concepts, target_type=slot.question_type.value,
@@ -426,7 +455,7 @@ class GenerationService:
             if blueprint.question_type != slot.question_type or blueprint.difficulty != slot.difficulty:
                 raise GenerationFailure("Concept blueprint did not match the requested question type or difficulty.")
             raw = await self.client.call_llm(
-                model=self.settings.generation_model,
+                model=generation_model or self.settings.generation_model,
                 system_prompt=concept_variation.SYSTEM_PROMPT,
                 user_prompt=concept_variation.build_prompt(seeds=seed_payload, blueprint=blueprint.model_dump(), custom_instruction=custom_instruction),
                 response_schema=_schema(GeneratedQuestion),
@@ -436,9 +465,9 @@ class GenerationService:
             raise GenerationFailure("Generated question did not match the requested type or difficulty.")
         return question
 
-    async def _validate(self, question: GeneratedQuestion, request: GenerationRequest, slot: GenerationSlot) -> ValidationResult:
+    async def _validate(self, question: GeneratedQuestion, request: GenerationRequest, slot: GenerationSlot, validation_model: str | None = None) -> ValidationResult:
         raw = await self.client.call_llm(
-            model=self.settings.validation_model,
+            model=validation_model or self.settings.validation_model,
             system_prompt=validator.SYSTEM_PROMPT,
             user_prompt=validator.build_prompt(
                 question=question.model_dump(), expected_type=slot.question_type.value,
@@ -469,6 +498,7 @@ class GenerationService:
         slot: GenerationSlot | None = None,
         seeds: list[RetrievalCandidate] | None = None,
         failure_reason: str | None = None,
+        model: str | None = None,
     ) -> None:
         if result:
             slot, seeds = result.slot, []
@@ -484,7 +514,7 @@ class GenerationService:
                 "INSERT INTO generation_logs (id, request_json, generation_mode, model, status, failure_reason, seed_question_ids, validation_result_json, similarity_score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid.uuid4()), request.model_dump_json(), request.generation_mode.value,
-                    self.settings.generation_model, status,
+                    model or self.settings.generation_model, status,
                     safe_error_message(failure_reason) if failure_reason else None,
                     json.dumps(seed_ids), validation_json,
                     similarity, datetime.now(UTC).isoformat(),
