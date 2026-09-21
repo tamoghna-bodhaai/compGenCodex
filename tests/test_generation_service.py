@@ -128,6 +128,24 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertEqual(result.slots[0].generation_attempt, 2)
         self.assertEqual(client.models, ["generator-primary", "validator-primary", "generator-fallback", "validator-fallback"])
 
+    def test_lifecycle_events_identify_primary_rejection_and_fallback_acceptance(self) -> None:
+        class PrimaryValidatorRejects(FakeOpenRouterClient):
+            async def call_llm(self, *, model: str | None = None, system_prompt: str, user_prompt: str, **kwargs: object) -> dict:
+                if model == "validator-primary":
+                    return {"valid": False, "independent_answer": "B", "matches_generated_answer": False,
+                            "ambiguous": False, "multiple_answers_possible": False, "sufficient_information": True,
+                            "concept_match": True, "difficulty_match": True, "comments": "answer mismatch"}
+                return await super().call_llm(model=model, system_prompt=system_prompt, user_prompt=user_prompt, **kwargs)
+
+        events: list[dict] = []
+        settings = Settings("test", "generator-primary", "validator-primary", None, None, 3, 1, .90,
+                            generation_fallback_model="generator-fallback", validation_fallback_model="validator-fallback")
+        result = asyncio.run(GenerationService(settings=settings, client=PrimaryValidatorRejects(), on_event=events.append).generate(request_for("structural_variation")))
+        self.assertEqual(len(result.slots), 1)
+        self.assertTrue(any(item["phase"] == "llm_validation" and item["outcome"] == "rejected" for item in events))
+        self.assertTrue(any(item["phase"] == "model_phase" and item["model_role"] == "fallback" for item in events))
+        self.assertTrue(any(item["phase"] == "llm_validation" and item["outcome"] == "accepted" and item["model"] == "validator-fallback" for item in events))
+
     def test_reference_generation_keeps_ordered_mapping_and_marks_reuse(self) -> None:
         request = GenerationRequest.model_validate(
             {

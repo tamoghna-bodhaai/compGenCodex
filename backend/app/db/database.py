@@ -50,6 +50,23 @@ CREATE TABLE IF NOT EXISTS generation_logs (
     similarity_score REAL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lifecycle_events (
+    id TEXT PRIMARY KEY,
+    job_id TEXT,
+    paper_id TEXT,
+    operation TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    slot INTEGER,
+    attempt INTEGER,
+    model TEXT,
+    model_role TEXT,
+    failure_code TEXT,
+    duration_ms INTEGER,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lifecycle_events_job_created_idx ON lifecycle_events (job_id, created_at);
 CREATE TABLE IF NOT EXISTS papers (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -195,6 +212,8 @@ def initialize_database(path: Path | None = None) -> Path:
             connection.execute(
                 "ALTER TABLE paper_generation_jobs ADD COLUMN control_state TEXT NOT NULL DEFAULT 'active'"
             )
+        if "last_activity_at" not in job_columns:
+            connection.execute("ALTER TABLE paper_generation_jobs ADD COLUMN last_activity_at TEXT")
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(papers)")}
         if "branding_template_id" not in paper_columns:
             connection.execute("ALTER TABLE papers ADD COLUMN branding_template_id TEXT")

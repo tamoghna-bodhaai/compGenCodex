@@ -21,6 +21,7 @@ from app.services.branding import BrandingProfileService
 from app.services.openrouter import ModelConfigurationError
 from app.services.papers import PaperConflictError, PaperNotFoundError, PaperService
 from app.services.retrieval import RetrievalError
+from app.services.lifecycle import emit_event
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
@@ -130,6 +131,9 @@ async def create_from_reference(
             reference_filter_formatted=format_filter(effective) if effective is not None else "",
         )
         job = PaperService().queue_initial_generation(paper["id"])
+        # Extraction finishes before a generation job exists; attach its safe
+        # summary once the job is allocated so operators can trace one ID.
+        emit_event(job_id=job["id"], paper_id=paper["id"], operation="reference", phase="extraction", outcome="accepted", details={"reference_questions": len(reference_questions), "has_images": bool(reference_images)})
         background_tasks.add_task(_run_initial_generation, paper["id"], job["id"])
         # Return fresh paper with job
         return PaperService().get(paper["id"])
@@ -160,6 +164,15 @@ def get_paper_comparison(paper_id: str) -> dict:
     try:
         return PaperService().get_paper_comparison(paper_id)
     except (PaperNotFoundError, PaperConflictError) as error:
+        _raise(error)
+
+
+@router.get("/{paper_id}/generation-jobs/{job_id}/events")
+def get_generation_events(paper_id: str, job_id: str) -> dict:
+    """Authenticated operator endpoint; intentionally not used by the frontend."""
+    try:
+        return {"items": PaperService().generation_events(paper_id, job_id)}
+    except PaperNotFoundError as error:
         _raise(error)
 
 
@@ -323,4 +336,5 @@ def export_paper(paper_id: str, request: PaperExportRequest) -> FileResponse:
         register_export(path=path, media_type=media_type, paper_id=paper_id)
         return FileResponse(path, media_type=media_type, filename=path.name)
     except (PaperNotFoundError, DocumentRenderError) as error:
+        emit_event(job_id=None, paper_id=paper_id, operation="export", phase="render", outcome="failed", failure=error)
         _raise(error)

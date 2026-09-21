@@ -20,6 +20,7 @@ from app.schemas.ingestion import ClassificationResponse
 from app.db.database import get_connection
 from app.services.openrouter import ModelConfigurationError, OpenRouterClient, OpenRouterError
 from app.services.seed_import import upsert_questions
+from app.services.lifecycle import emit_event
 
 MAX_UPLOAD_BYTES = 35 * 1024 * 1024
 # A classified question includes substantial metadata, so a 28k-character
@@ -259,11 +260,14 @@ class QuestionIngestionService:
         """Background ingestion is process-local; surface interrupted work honestly."""
         now = _now()
         with get_connection() as connection:
+            jobs = connection.execute("SELECT id FROM ingestion_jobs WHERE state IN ('queued', 'running')").fetchall()
             connection.execute(
                 "UPDATE ingestion_jobs SET state = 'failed', phase = 'failed', message = 'Ingestion stopped because the backend restarted.', "
                 "error_message = '', finished_at = ?, updated_at = ? WHERE state IN ('queued', 'running')",
                 (now, now),
             )
+        for job in jobs:
+            emit_event(job_id=job["id"], paper_id=None, operation="ingestion", phase="job", outcome="interrupted", failure="interrupted")
 
     def create_job(self, source_name: str) -> dict:
         job_id, now = str(uuid.uuid4()), _now()
@@ -272,6 +276,7 @@ class QuestionIngestionService:
                 "INSERT INTO ingestion_jobs (id, source_name, state, phase, message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (job_id, source_name or "pasted-question.txt", "queued", "queued", "Queued for ingestion", now, now),
             )
+        emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="queue", outcome="accepted")
         return self.get_job(job_id)
 
     def get_job(self, job_id: str) -> dict:
@@ -317,14 +322,16 @@ class QuestionIngestionService:
 
     async def run_job(self, job_id: str, *, filename: str, content_type: str | None, content: bytes, source_text: str, conversion_note: str) -> None:
         self._update_job(job_id, state="running", phase="extracting", message="Extracting readable text", started=True)
+        emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="extraction", outcome="started")
 
         async def progress(phase: str, message: str, total_chunks: int | None = None, completed_chunks: int | None = None) -> None:
             self._update_job(job_id, phase=phase, message=message, total_chunks=total_chunks, completed_chunks=completed_chunks)
 
         try:
             result = await self.ingest(filename=filename, content_type=content_type, content=content, source_text=source_text,
-                                       conversion_note=conversion_note, on_progress=progress)
+                                       conversion_note=conversion_note, on_progress=progress, job_id=job_id)
             self._update_job(job_id, state="succeeded", phase="complete", message="Ingestion complete", ingested_questions=result["questions"], finished=True)
+            emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="job", outcome="succeeded")
         except Exception as error:  # Background work must surface a user-safe failure state.
             self._update_job(
                 job_id,
@@ -334,6 +341,7 @@ class QuestionIngestionService:
                 error_message=safe_error_message(error),
                 finished=True,
             )
+            emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="job", outcome="failed", failure=error)
 
     async def ingest(
         self,
@@ -344,6 +352,7 @@ class QuestionIngestionService:
         source_text: str,
         conversion_note: str,
         on_progress: Callable[[str, str, int | None, int | None], Awaitable[None] | None] | None = None,
+        job_id: str | None = None,
     ) -> dict:
         settings = get_settings()
         source = extract_source(
@@ -353,6 +362,7 @@ class QuestionIngestionService:
             source_text=source_text,
             use_vision=settings.classification_use_vision,
         )
+        emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="extraction", outcome="completed", details={"vision": bool(source.vision_pages)})
         if source.vision_pages:
             # One page per request keeps question boundaries and page references
             # unambiguous, and avoids overwhelming a model's image context.
@@ -391,6 +401,8 @@ class QuestionIngestionService:
             last_error: Exception | None = None
             for attempt_model in models_to_try:
                 try:
+                    role = "fallback" if attempt_model == fallback_model else "primary"
+                    emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="classification", outcome="started", slot=chunk_number, attempt=models_to_try.index(attempt_model) + 1, model=attempt_model, model_role=role)
                     response = await client.call_llm(
                         model=attempt_model,
                         system_prompt=INGESTION_SYSTEM_PROMPT,
@@ -403,15 +415,18 @@ class QuestionIngestionService:
                         images=images,
                     )
                     classified = ClassificationResponse.model_validate(response)
+                    emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="classification", outcome="accepted", slot=chunk_number, attempt=models_to_try.index(attempt_model) + 1, model=attempt_model, model_role=role)
                     break
                 except ModelConfigurationError:
                     # Missing API key/model config is not retryable across fallback
                     raise
                 except (OpenRouterError, ValidationError, ValueError) as error:
                     last_error = error
+                    emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="classification", outcome="failed", slot=chunk_number, attempt=models_to_try.index(attempt_model) + 1, model=attempt_model, model_role=role, failure=error)
                     if attempt_model == models_to_try[-1]:
                         break
                     # Retry with next model (fallback) - transient provider or schema error
+                    emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="fallback", outcome="scheduled", slot=chunk_number, model=fallback_model, model_role="fallback")
                     continue
             if classified is None:
                 if isinstance(last_error, OpenRouterError):

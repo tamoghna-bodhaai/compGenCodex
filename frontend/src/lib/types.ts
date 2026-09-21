@@ -15,6 +15,7 @@ export interface GenerationJob {
   completed_questions: number;
   message?: string;
   error_message?: string;
+  last_activity_at?: string;
 }
 
 export interface IngestionJob {

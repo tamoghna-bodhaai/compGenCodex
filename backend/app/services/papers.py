@@ -11,6 +11,7 @@ from app.core.error_safety import safe_error_message
 from app.schemas.generation import GeneratedSlotResult, GenerationRequest, GenerationSlot
 from app.schemas.papers import AddManualQuestionRequest, PaperCreateRequest, PaperQuestionInput, PaperUpdateRequest, QuestionEditRequest
 from app.services.generation import GenerationService
+from app.services.lifecycle import emit_event, events_for_job
 
 
 class PaperNotFoundError(RuntimeError):
@@ -84,6 +85,8 @@ class PaperService:
                     "error_message = '', finished_at = ?, updated_at = ? WHERE id = ?",
                     (completed, now, now, job["id"]),
                 )
+        for job in jobs:
+            emit_event(job_id=job["id"], paper_id=job["paper_id"], operation=job["operation"], phase="job", outcome="interrupted", failure="interrupted")
 
     def create(self, request: PaperCreateRequest) -> dict:
         paper_id = str(uuid.uuid4())
@@ -420,6 +423,7 @@ class PaperService:
             if "UNIQUE constraint failed" in str(error):
                 raise PaperConflictError("This paper already has a generation job in progress.") from error
             raise
+        emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="queue", outcome="accepted")
         return self._generation_job(job_id)
 
     def create_reference_paper(
@@ -559,6 +563,7 @@ class PaperService:
                 total_ref = len(paper["generation_config"].get("reference_questions") or [])
                 start_msg = f"Generating from reference {ref_filter_fmt} ({total_ref} selected) — validating questions"
             self._update_generation_job(job_id, state="running", message=start_msg, started=True)
+            emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="job", outcome="started")
             request = self._core_generation_request(paper["generation_config"])
             all_slots = request.build_slots()
             completed_slots = self._completed_initial_slots(paper) & {slot.slot for slot in all_slots}
@@ -576,6 +581,7 @@ class PaperService:
                 self._store_generated_result(
                     paper_id, result, section_id=section_ids.get(result.slot.section_title or ""), position=result.slot.slot,
                 )
+                emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="persistence", outcome="accepted", slot=result.slot.slot, attempt=result.generation_attempt)
                 job = self._generation_job(job_id)
                 completed = min(job["completed_questions"] + 1, job["total_questions"])
                 self._update_generation_job(
@@ -584,11 +590,27 @@ class PaperService:
                     message=f"Validated {completed} of {job['total_questions']} questions",
                 )
 
+            async def lifecycle(event: dict) -> None:
+                phase = str(event.get("phase", "generation"))
+                outcome = str(event.get("outcome", "started"))
+                slot = event.get("slot")
+                role = event.get("model_role") or ("fallback" if event.get("model") in {GenerationService().settings.generation_fallback_model, GenerationService().settings.validation_fallback_model} else "primary")
+                emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase=phase, outcome=outcome,
+                           slot=slot if isinstance(slot, int) else None, attempt=event.get("attempt") if isinstance(event.get("attempt"), int) else None,
+                           model=event.get("model") if isinstance(event.get("model"), str) else None, model_role=role,
+                           failure=event.get("failure"), duration_ms=event.get("duration_ms") if isinstance(event.get("duration_ms"), int) else None,
+                           details=event.get("details") if isinstance(event.get("details"), dict) else None)
+                if phase in {"generation", "llm_validation", "retry", "model_phase"}:
+                    noun = "Retrying" if phase == "retry" else ("Validating" if phase == "llm_validation" else "Generating")
+                    suffix = f" question {slot}/{len(all_slots)}" if isinstance(slot, int) else ""
+                    if role == "fallback": suffix += " with fallback model"
+                    self._update_generation_job(job_id, message=f"{noun}{suffix}")
+
             ref_questions = paper["generation_config"].get("reference_questions")
             ref_images = paper["generation_config"].get("reference_images")
             ref_instruction = paper["generation_config"].get("reference_custom_instruction")
             if ref_questions:
-                await GenerationService().generate_from_reference(
+                await GenerationService(on_event=lifecycle).generate_from_reference(
                     request,
                     reference_questions=ref_questions,
                     reference_images=ref_images,
@@ -598,7 +620,7 @@ class PaperService:
                     before_slot=lambda _: self._wait_until_job_can_continue(job_id),
                 )
             else:
-                await GenerationService().generate(
+                await GenerationService(on_event=lifecycle).generate(
                     request,
                     on_slot_complete=report_progress,
                     slots=missing_slots,
@@ -615,6 +637,7 @@ class PaperService:
                 message=final_msg,
                 finished=True,
             )
+            emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="job", outcome="succeeded")
         except asyncio.CancelledError:
             try:
                 job = self._generation_job(job_id)
@@ -622,6 +645,7 @@ class PaperService:
                 return
             if job.get("control_state") != "cancelled":
                 self._update_generation_job(job_id, state="failed", message="Generation interrupted", error_message="Generation was interrupted.", finished=True)
+                emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="job", outcome="failed", failure="interrupted")
             return
         except (GenerationCancelled, PaperNotFoundError):
             # A deleted paper cascades its job rows. That is a normal terminal
@@ -635,6 +659,7 @@ class PaperService:
                 error_message=safe_error_message(error),
                 finished=True,
             )
+            emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="job", outcome="failed", failure=error)
         finally:
             self._unregister_job_task(job_id)
 
@@ -658,6 +683,7 @@ class PaperService:
             if "UNIQUE constraint failed" in str(error):
                 raise PaperConflictError("This paper already has a generation job in progress.") from error
             raise
+        emit_event(job_id=job_id, paper_id=paper_id, operation="solutions", phase="queue", outcome="accepted")
         return self._generation_job(job_id)
 
     async def run_solution_generation_job(self, paper_id: str, job_id: str) -> None:
@@ -665,6 +691,7 @@ class PaperService:
         try:
             await self._wait_until_job_can_continue(job_id)
             self._update_generation_job(job_id, state="running", message="Generating worked solutions", started=True)
+            emit_event(job_id=job_id, paper_id=paper_id, operation="solutions", phase="job", outcome="started")
             paper = self.get(paper_id)
             questions = [question for question in paper["questions"] if not question.get("solution")]
             if not questions:
@@ -680,6 +707,7 @@ class PaperService:
                         result = await service.generate_solution(
                             question["question_json"], exam=paper["exam"], subject=paper["subject"]
                         )
+                        emit_event(job_id=job_id, paper_id=paper_id, operation="solutions", phase="generation", outcome="accepted", slot=question["position"])
                         return question, result, None
                 except (asyncio.CancelledError, GenerationCancelled):
                     raise
@@ -695,6 +723,7 @@ class PaperService:
                 for task in asyncio.as_completed(tasks):
                     question, result, error = await task
                     if error is not None:
+                        emit_event(job_id=job_id, paper_id=paper_id, operation="solutions", phase="generation", outcome="failed", slot=question["position"], failure=error)
                         failures.append((question, safe_error_message(error)))
                         continue
                     assert result is not None
@@ -728,6 +757,7 @@ class PaperService:
                     error_message=failure_details,
                     finished=True,
                 )
+                emit_event(job_id=job_id, paper_id=paper_id, operation="solutions", phase="job", outcome="failed", failure="partial_solution_failure")
                 return
             self._update_generation_job(
                 job_id,
@@ -736,6 +766,7 @@ class PaperService:
                 message=f"Generated {completed} worked solutions",
                 finished=True,
             )
+            emit_event(job_id=job_id, paper_id=paper_id, operation="solutions", phase="job", outcome="succeeded")
         except asyncio.CancelledError:
             try:
                 job = self._generation_job(job_id)
@@ -755,6 +786,7 @@ class PaperService:
                 error_message=safe_error_message(error),
                 finished=True,
             )
+            emit_event(job_id=job_id, paper_id=paper_id, operation="solutions", phase="job", outcome="failed", failure=error)
         finally:
             self._unregister_job_task(job_id)
 
@@ -766,6 +798,7 @@ class PaperService:
             job["id"], control_state="paused",
             message=f"Paused at {job['completed_questions']} of {job['total_questions']}. Completed work is available in the editor.",
         )
+        emit_event(job_id=job["id"], paper_id=paper_id, operation=job["operation"], phase="control", outcome="paused")
         return self._generation_job(job["id"])
 
     def resume_generation(self, paper_id: str) -> dict:
@@ -773,6 +806,7 @@ class PaperService:
         if job.get("control_state") != "paused":
             raise PaperConflictError("This generation job is not paused.")
         self._update_generation_job(job["id"], control_state="active", message="Resuming generation")
+        emit_event(job_id=job["id"], paper_id=paper_id, operation=job["operation"], phase="control", outcome="resumed")
         return self._generation_job(job["id"])
 
     def cancel_generation(self, paper_id: str) -> dict:
@@ -782,6 +816,7 @@ class PaperService:
             message=f"Generation cancelled after {job['completed_questions']} of {job['total_questions']}. Partial work is retained.",
             error_message="", finished=True,
         )
+        emit_event(job_id=job["id"], paper_id=paper_id, operation=job["operation"], phase="control", outcome="cancelled", failure="cancelled")
         task = self._active_generation_tasks.get(job["id"])
         if task and not task.done():
             task.cancel()
@@ -829,6 +864,14 @@ class PaperService:
             raise PaperNotFoundError("Generation job not found")
         return _decode(row)
 
+    def generation_events(self, paper_id: str, job_id: str) -> list[dict]:
+        """Backend-only diagnostic timeline; routing remains behind API auth."""
+        self._ensure_paper(paper_id)
+        job = self._generation_job(job_id)
+        if job["paper_id"] != paper_id:
+            raise PaperNotFoundError("Generation job not found")
+        return events_for_job(job_id)
+
     def _latest_generation_job(self, paper_id: str) -> dict | None:
         with get_connection() as connection:
             row = connection.execute(
@@ -849,7 +892,7 @@ class PaperService:
         finished: bool = False,
     ) -> None:
         now = _now()
-        updates: dict[str, Any] = {"updated_at": now}
+        updates: dict[str, Any] = {"updated_at": now, "last_activity_at": now}
         if state is not None:
             updates["state"] = state
         if completed_questions is not None:

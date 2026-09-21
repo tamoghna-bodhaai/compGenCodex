@@ -87,6 +87,13 @@ class DocumentRendererTests(unittest.TestCase):
         self.assertEqual(answer_to_readable(r"$\\boxed{\\frac{2}{3}}$"), "(2)/(3)")
         self.assertEqual(answer_to_readable(r"2.83\\,\\mathrm{N\\cdot m}"), "2.83 N·m")
 
+    def test_pdf_source_repairs_nested_inline_math(self) -> None:
+        source = PaperDocumentRenderer(Path(self.tmp.name) / "exports")._latex_math(
+            r"Let \(S\text{ be }\(x+1\). Then \(S\) is positive."
+        )
+        self.assertEqual(source.count(r"\("), source.count(r"\)"))
+        self.assertNotIn(r"\text{ be }\(", source)
+
     def test_question_paper_and_answer_key_export(self) -> None:
         paper = PaperService().get(self.paper["id"])
         renderer = PaperDocumentRenderer(Path(self.tmp.name) / "exports")

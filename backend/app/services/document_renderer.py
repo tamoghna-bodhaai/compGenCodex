@@ -1011,9 +1011,30 @@ class PaperDocumentRenderer:
     def _latex_math(value: str) -> str:
         """Pass question LaTeX straight to LaTeX — same fidelity as KaTeX UI."""
         text = _normalize_latex(str(value or ""))
-        # Generation pipelines emit \(...\) / \[...\] which LaTeX understands
-        # natively; bare \(...\) inside $...$ would break, so keep as-is.
-        return text
+        # Generated content occasionally nests inline delimiters. LaTeX rejects
+        # such pairs, so ignore a redundant opener and close an orphaned one.
+        output: list[str] = []
+        inline_open = False
+        cursor = 0
+        while cursor < len(text):
+            token = text[cursor:cursor + 2]
+            if token == r"\(":
+                if not inline_open:
+                    output.append(token)
+                    inline_open = True
+                cursor += 2
+                continue
+            if token == r"\)":
+                if inline_open:
+                    output.append(token)
+                    inline_open = False
+                cursor += 2
+                continue
+            output.append(text[cursor])
+            cursor += 1
+        if inline_open:
+            output.append(r"\)")
+        return "".join(output)
 
     @staticmethod
     def _latex_answer(value: Any) -> str:
@@ -1121,6 +1142,8 @@ class PaperDocumentRenderer:
         duration_text = self._format_duration(duration) if duration not in (None, "") else "2 : 30 hours"
         lines = [
             r"\documentclass[11pt,a4paper]{article}",
+            r"\usepackage[T1]{fontenc}",
+            r"\usepackage[utf8]{inputenc}",
             r"\usepackage[margin=19mm,top=17mm,bottom=17mm]{geometry}",
             r"\usepackage{amsmath,amssymb,amsfonts}",
             r"\usepackage{mathptmx}",

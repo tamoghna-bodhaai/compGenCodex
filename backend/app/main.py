@@ -16,6 +16,7 @@ from app.api.questions import router as questions_router
 from app.db.database import initialize_database
 from app.services.ingestion import QuestionIngestionService
 from app.services.papers import PaperService
+from app.services.lifecycle import cleanup_events
 
 app = FastAPI(
     title="Question Paper Generator API",
@@ -50,6 +51,7 @@ def startup() -> None:
     initialize_database()
     PaperService.recover_interrupted_generation_jobs()
     QuestionIngestionService.recover_interrupted_jobs()
+    cleanup_events()
 
 
 @app.get("/api/health", tags=["health"])

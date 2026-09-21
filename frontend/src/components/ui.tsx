@@ -45,6 +45,7 @@ export function JobProgress({ job, onPause, onResume, onCancel }: { job: Generat
   return <div className={`${s.jobProgress} ${s[`job_${job.state}`]} ${paused ? s.job_paused : ""}`}>
     <div className={s.jobHead}><div><span className={`${s.liveDot} ${active && !paused ? s.pulse : ""}`} /><strong>{title}</strong></div><span>{job.completed_questions}/{job.total_questions}</span></div>
     <p>{job.message || title}</p>
+    {active && job.last_activity_at && <small className={s.muted}>Last activity {new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(new Date(job.last_activity_at))}</small>}
     {active && <div className={s.progressTrack} aria-label={`${percent}% complete`}><span style={{ width: `${percent}%` }} /></div>}
     {active && (onPause || onResume || onCancel) && <div className={s.inlineActions}>{paused ? <Button size="small" tone="primary" onClick={onResume}>Resume</Button> : <Button size="small" onClick={onPause}>Pause</Button>}<Button size="small" tone="danger" onClick={onCancel}>Cancel</Button></div>}
     {job.error_message && <p className={s.errorText}>{job.error_message}</p>}

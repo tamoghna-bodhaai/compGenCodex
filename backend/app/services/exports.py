@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.db.database import get_connection
+from app.services.lifecycle import emit_event
 
 
 class ExportNotFoundError(RuntimeError):
@@ -61,6 +62,7 @@ def register_export(*, path: Path, media_type: str, paper_id: str | None, kind: 
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             tuple(item.values()),
         )
+    emit_event(job_id=None, paper_id=paper_id, operation="export", phase="persistence", outcome="accepted", details={"format": media_type, "bytes": item["byte_size"]})
     return item
 
 

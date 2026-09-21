@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import uuid
+import time
 from datetime import UTC, datetime
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -83,10 +84,18 @@ def max_seed_similarity(question: GeneratedQuestion, seeds: list[RetrievalCandid
 
 
 class GenerationService:
-    def __init__(self, *, settings: Settings | None = None, client: OpenRouterClient | None = None, retriever: MetadataFirstRetriever | None = None) -> None:
+    def __init__(self, *, settings: Settings | None = None, client: OpenRouterClient | None = None, retriever: MetadataFirstRetriever | None = None,
+                 on_event: Callable[[dict], Awaitable[None] | None] | None = None) -> None:
         self.settings = settings or get_settings()
         self.client = client or OpenRouterClient(self.settings)
         self.retriever = retriever or MetadataFirstRetriever()
+        self.on_event = on_event
+
+    async def _event(self, **event: object) -> None:
+        if self.on_event:
+            notification = self.on_event(dict(event))
+            if notification is not None:
+                await notification
 
     async def generate(
         self,
@@ -109,10 +118,13 @@ class GenerationService:
         # cancels the rest of the paper.
         attempt = 0
         for generation_model, validation_model in self._model_phases():
+            role = "primary" if (generation_model, validation_model) == self._model_phases()[0] else "fallback"
+            await self._event(phase="model_phase", outcome="started", model=generation_model, model_role=role, attempt=attempt + 1)
             for _ in range(self.settings.max_generation_attempts):
                 if not pending:
                     break
                 attempt += 1
+                await self._event(phase="generation", outcome="started", model=generation_model, model_role=role, attempt=attempt)
                 candidates, failures = await self._generate_candidates(request, pending, attempt, before_slot, custom_instruction, generation_model)
                 candidates, local_failures = await self._deterministically_validate(request, candidates)
                 failures.update(local_failures)
@@ -126,6 +138,8 @@ class GenerationService:
                         if notification is not None:
                             await notification
                 pending = [slot for slot in pending if slot.slot in failures]
+                if pending:
+                    await self._event(phase="retry", outcome="scheduled", model=generation_model, model_role=role, attempt=attempt, details={"pending_slots": len(pending)})
             if not pending:
                 break
         if pending:
@@ -169,10 +183,13 @@ class GenerationService:
         # We bypass real retrieval and inject reference seeds per slot
         attempt = 0
         for generation_model, validation_model in self._model_phases():
+            role = "primary" if (generation_model, validation_model) == self._model_phases()[0] else "fallback"
+            await self._event(phase="model_phase", outcome="started", model=generation_model, model_role=role, attempt=attempt + 1)
             for _ in range(self.settings.max_generation_attempts):
                 if not pending:
                     break
                 attempt += 1
+                await self._event(phase="generation", outcome="started", model=generation_model, model_role=role, attempt=attempt)
                 candidates, failures = await self._generate_candidates_from_reference(
                     request, pending, attempt, before_slot, custom_instruction, reference_questions, reference_images, generation_model
                 )
@@ -188,6 +205,8 @@ class GenerationService:
                         if notification is not None:
                             await notification
                 pending = [slot for slot in pending if slot.slot in failures]
+                if pending:
+                    await self._event(phase="retry", outcome="scheduled", model=generation_model, model_role=role, attempt=attempt, details={"pending_slots": len(pending)})
             if not pending:
                 break
         if pending:
@@ -222,7 +241,9 @@ class GenerationService:
             }
 
         async def produce(slot: GenerationSlot) -> _Candidate:
+            started = time.monotonic()
             try:
+                await self._event(phase="retrieval", outcome="started", slot=slot.slot, attempt=attempt, model=generation_model)
                 if before_slot:
                     notification = before_slot(slot)
                     if notification is not None:
@@ -284,6 +305,7 @@ class GenerationService:
                     question = await self._generate_question(request, slot, seeds, effective_instruction, reference_images, generation_model)
                     similarity = max_seed_similarity(question, seeds)  # against synthetic
                     # For reference mode we relax similarity check (allow close)
+                    await self._event(phase="generation", outcome="completed", slot=slot.slot, attempt=attempt, model=generation_model, duration_ms=round((time.monotonic()-started)*1000))
                     return _Candidate(
                         slot, question, seeds, similarity, attempt,
                         reference_question_id=reference_id,
@@ -292,6 +314,7 @@ class GenerationService:
                         reference_reused=slot.slot > len(reference_questions), generation_model=generation_model,
                     )  # type: ignore
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
+                await self._event(phase="generation", outcome="failed", slot=slot.slot, attempt=attempt, model=generation_model, failure=error, duration_ms=round((time.monotonic()-started)*1000))
                 self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error), model=generation_model)
                 raise
 
@@ -309,6 +332,7 @@ class GenerationService:
         semaphore = asyncio.Semaphore(self.settings.generation_burst_concurrency)
 
         async def produce(slot: GenerationSlot) -> _Candidate:
+            started = time.monotonic()
             try:
                 if before_slot:
                     notification = before_slot(slot)
@@ -320,12 +344,15 @@ class GenerationService:
                         if notification is not None:
                             await notification
                     seeds = self.retriever.retrieve(request, slot)
+                    await self._event(phase="retrieval", outcome="completed", slot=slot.slot, attempt=attempt, model=generation_model, details={"seed_count": len(seeds)})
                     question = await self._generate_question(request, slot, seeds, custom_instruction, generation_model=generation_model)
                     similarity = max_seed_similarity(question, seeds)
                     if request.generation_mode == GenerationMode.CONCEPT and similarity > self.settings.max_seed_similarity:
                         raise GenerationFailure(f"Generated question is too similar to its seed pool ({similarity:.2f}).")
+                    await self._event(phase="generation", outcome="completed", slot=slot.slot, attempt=attempt, model=generation_model, duration_ms=round((time.monotonic()-started)*1000))
                     return _Candidate(slot, question, seeds, similarity, attempt, generation_model)
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
+                await self._event(phase="generation", outcome="failed", slot=slot.slot, attempt=attempt, model=generation_model, failure=error, duration_ms=round((time.monotonic()-started)*1000))
                 self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error), model=generation_model)
                 raise
 
@@ -340,6 +367,7 @@ class GenerationService:
             async with semaphore:
                 failure = _deterministic_failure(candidate.question, candidate.slot)
                 if failure:
+                    await self._event(phase="deterministic_validation", outcome="rejected", slot=candidate.slot.slot, attempt=candidate.attempt, model=candidate.generation_model, failure=failure)
                     self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=failure, model=candidate.generation_model)
                     raise GenerationFailure(failure)
                 return candidate
@@ -352,7 +380,9 @@ class GenerationService:
         semaphore = asyncio.Semaphore(self.settings.validation_burst_concurrency)
 
         async def validate(candidate: _Candidate) -> GeneratedSlotResult:
+            started = time.monotonic()
             try:
+                await self._event(phase="llm_validation", outcome="started", slot=candidate.slot.slot, attempt=candidate.attempt, model=validation_model)
                 async with semaphore:
                     validation = await self._validate(candidate.question, request, candidate.slot, validation_model)
                 if not validation.valid or not self._validation_matches_requirements(validation):
@@ -370,8 +400,10 @@ class GenerationService:
                     reference_reused=candidate.reference_reused,
                 )
                 self._log(request, result=result, status="validated", model=candidate.generation_model)
+                await self._event(phase="llm_validation", outcome="accepted", slot=candidate.slot.slot, attempt=candidate.attempt, model=validation_model, duration_ms=round((time.monotonic()-started)*1000), details={"valid": validation.valid, "answer_matches": validation.matches_generated_answer, "concept_matches": validation.concept_match, "difficulty_matches": validation.difficulty_match})
                 return result
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
+                await self._event(phase="llm_validation", outcome="rejected", slot=candidate.slot.slot, attempt=candidate.attempt, model=validation_model, failure=error, duration_ms=round((time.monotonic()-started)*1000))
                 self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=safe_error_message(error), model=validation_model)
                 raise
 
