@@ -13,7 +13,7 @@ Target difficulty (1-5): {difficulty}
 Originality strength: {variation_strength}
 Custom regeneration instruction: {custom_instruction or "None"}
 
-Choose an archetype, setup, unknown, and reasoning path different from the dominant seed archetype. Do not reuse the seed's surface setup or unknown.
+The source marked primary should guide this variation; use every supporting source as conceptual context. Choose an archetype, setup, unknown, and reasoning path different from the dominant seed archetype. Do not reuse the seed's surface setup or unknown.
 
 Seeds:
 {seeds}

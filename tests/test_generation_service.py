@@ -11,6 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 
 from app.core.settings import Settings
+from app.db.database import get_connection
 from app.schemas.generation import GeneratedQuestion, GeneratedSolution, GenerationRequest
 from app.services.generation import GenerationService
 from app.services.openrouter import parse_model_json, repair_decoded_latex_escapes, strict_json_schema
@@ -243,6 +244,42 @@ class GenerationServiceTests(unittest.TestCase):
         slots = request.build_slots()
         self.assertEqual(len(slots), 15)
         self.assertEqual([slot.selected_seed_question_id for slot in slots[:5]], ["seed-1", "seed-2", "seed-1", "seed-2", "seed-1"])
+        self.assertTrue(all(slot.selected_seed_question_ids == ["seed-1", "seed-2"] for slot in slots))
+
+    def test_selected_seed_pool_grounds_every_variation_and_rotates_primary(self) -> None:
+        with get_connection() as connection:
+            seed_ids = [row["id"] for row in connection.execute("SELECT id FROM questions ORDER BY source_key LIMIT 2").fetchall()]
+        request = GenerationRequest.model_validate(
+            {
+                "title": "Selected pool variations", "exam": "JEE", "subject": "Mathematics",
+                "generation_mode": "structural_variation",
+                "subtopic_plans": [{
+                    "topic": "Definite Integrals", "question_types": [{"type": "single_correct_mcq", "count": 3}],
+                    "difficulty_distribution": [{"difficulty": 3, "count": 3}], "seed_question_ids": seed_ids,
+                }],
+            }
+        )
+        client = FakeOpenRouterClient()
+        result = asyncio.run(GenerationService(settings=self.settings, client=client).generate(request))
+        self.assertEqual([slot.seed_question_ids for slot in result.slots], [seed_ids, seed_ids, seed_ids])
+        self.assertEqual([slot.primary_seed_question_id for slot in result.slots], [seed_ids[0], seed_ids[1], seed_ids[0]])
+        generation_prompts = [prompt for prompt in client.prompts if "Seed questions:" in prompt]
+        self.assertEqual(len(generation_prompts), 3)
+        self.assertTrue(all("'source_role': 'primary'" in prompt and "'source_role': 'supporting'" in prompt for prompt in generation_prompts))
+
+    def test_automatic_seed_pool_rotates_primary_sources(self) -> None:
+        request = GenerationRequest.model_validate(
+            {
+                "title": "Automatic pool variations", "exam": "JEE", "subject": "Mathematics",
+                "chapters": ["Calculus"], "topics": ["Definite Integrals"],
+                "question_types": [{"type": "single_correct_mcq", "count": 2}],
+                "difficulty_distribution": [{"difficulty": 3, "count": 2}], "generation_mode": "structural_variation",
+            }
+        )
+        result = asyncio.run(GenerationService(settings=self.settings, client=FakeOpenRouterClient()).generate(request))
+        self.assertGreaterEqual(len(result.slots[0].seed_question_ids), 2)
+        self.assertEqual(result.slots[0].seed_question_ids, result.slots[1].seed_question_ids)
+        self.assertNotEqual(result.slots[0].primary_seed_question_id, result.slots[1].primary_seed_question_id)
 
     def test_topic_level_plan_is_valid_without_a_subtopic(self) -> None:
         request = GenerationRequest.model_validate(

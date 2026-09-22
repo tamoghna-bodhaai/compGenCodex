@@ -66,6 +66,14 @@ CREATE TABLE IF NOT EXISTS lifecycle_events (
     details_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS llm_cost_ledger (
+    id TEXT PRIMARY KEY, job_id TEXT, paper_id TEXT, operation TEXT NOT NULL, phase TEXT NOT NULL,
+    slot INTEGER, attempt INTEGER, model TEXT, provider_generation_id TEXT,
+    input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, cost_usd NUMERIC,
+    usage_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS llm_cost_ledger_job_idx ON llm_cost_ledger (job_id, created_at);
+CREATE INDEX IF NOT EXISTS llm_cost_ledger_paper_idx ON llm_cost_ledger (paper_id, created_at);
 CREATE INDEX IF NOT EXISTS lifecycle_events_job_created_idx ON lifecycle_events (job_id, created_at);
 CREATE TABLE IF NOT EXISTS papers (
     id TEXT PRIMARY KEY,

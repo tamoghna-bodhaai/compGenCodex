@@ -24,6 +24,7 @@ from app.services.openrouter import ModelConfigurationError
 from app.services.papers import PaperConflictError, PaperNotFoundError, PaperService
 from app.services.retrieval import RetrievalError
 from app.services.lifecycle import emit_event
+from app.services.costs import cost_summary
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
@@ -174,6 +175,16 @@ def get_generation_events(paper_id: str, job_id: str) -> dict:
     """Authenticated operator endpoint; intentionally not used by the frontend."""
     try:
         return {"items": PaperService().generation_events(paper_id, job_id)}
+    except PaperNotFoundError as error:
+        _raise(error)
+
+
+@router.get("/{paper_id}/generation-jobs/{job_id}/cost")
+def get_generation_cost(paper_id: str, job_id: str) -> dict:
+    """Authenticated backend accounting endpoint; no content or provider payloads."""
+    try:
+        PaperService().generation_events(paper_id, job_id)  # verifies ownership
+        return cost_summary(paper_id=paper_id, job_id=job_id)
     except PaperNotFoundError as error:
         _raise(error)
 

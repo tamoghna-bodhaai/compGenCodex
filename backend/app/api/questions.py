@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query
 from app.db.database import decode_question_row, get_connection
 from app.services.ingestion import IngestionError, MAX_UPLOAD_BYTES, QuestionIngestionService
 from app.services.openrouter import ModelConfigurationError, OpenRouterError
+from app.services.costs import cost_summary
 
 router = APIRouter(prefix="/api/questions", tags=["questions"])
 
@@ -46,6 +47,15 @@ def list_ingestion_jobs(limit: int = 20) -> dict:
 def get_ingestion_job(job_id: str) -> dict:
     try:
         return QuestionIngestionService().get_job(job_id)
+    except IngestionError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+
+@router.get("/ingestion-jobs/{job_id}/cost")
+def get_ingestion_cost(job_id: str) -> dict:
+    try:
+        QuestionIngestionService().get_job(job_id)  # verifies the job exists
+        return cost_summary(job_id=job_id)
     except IngestionError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 

@@ -508,6 +508,7 @@ class QuestionIngestionService:
                         temperature=0.1,
                         max_tokens=8_000,
                         images=images,
+                        cost_context={"job_id": job_id, "operation": "ingestion", "phase": "classification", "slot": chunk_number, "attempt": models_to_try.index(attempt_model) + 1},
                     )
                     classified = ClassificationResponse.model_validate(response)
                     emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="classification", outcome="accepted", slot=chunk_number, attempt=models_to_try.index(attempt_model) + 1, model=attempt_model, model_role=role)

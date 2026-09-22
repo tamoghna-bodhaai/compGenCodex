@@ -51,8 +51,8 @@ class MetadataFirstRetriever:
     """Metadata filter -> semantic fallback score -> archetype-diverse seed selection."""
 
     def retrieve(self, request: GenerationRequest, slot: GenerationSlot, *, candidate_limit: int = 30, seed_count: int = 5) -> list[RetrievalCandidate]:
-        if slot.selected_seed_question_id:
-            return self._retrieve_selected_seed(request, slot)
+        if slot.selected_seed_question_ids or slot.selected_seed_question_id:
+            return self._retrieve_selected_seeds(request, slot)
         clauses = ["exam = ?", "subject = ?", "question_type = ?"]
         parameters: list[object] = [request.exam, request.subject, slot.question_type.value]
         slot_chapters = slot.chapters or request.chapters
@@ -68,9 +68,9 @@ class MetadataFirstRetriever:
         sql = f"SELECT * FROM questions WHERE {' AND '.join(clauses)} LIMIT ?"
         with get_connection() as connection:
             rows = [decode_question_row(row) for row in connection.execute(sql, [*parameters, candidate_limit]).fetchall()]
-        if len(rows) < 3:
+        if not rows:
             raise RetrievalError(
-                "Not enough compatible seed questions found. Select a taxonomy, question type, and difficulty with at least three labeled seeds."
+                "No compatible seed questions found. Select a taxonomy, question type, and difficulty with at least one labeled seed."
             )
 
         query_terms = _terms(" ".join([*request.concepts, *slot_chapters, *slot_topics, *slot_subtopics]))
@@ -92,26 +92,32 @@ class MetadataFirstRetriever:
         return self._select_diverse(candidates, seed_count)
 
     @staticmethod
-    def _retrieve_selected_seed(request: GenerationRequest, slot: GenerationSlot) -> list[RetrievalCandidate]:
-        """Resolve a teacher-picked source without applying the three-seed rule."""
+    def _retrieve_selected_seeds(request: GenerationRequest, slot: GenerationSlot) -> list[RetrievalCandidate]:
+        """Resolve every teacher-picked source in selection order."""
+        selected_ids = slot.selected_seed_question_ids or ([slot.selected_seed_question_id] if slot.selected_seed_question_id else [])
+        placeholders = ",".join("?" for _ in selected_ids)
         with get_connection() as connection:
-            row = connection.execute("SELECT * FROM questions WHERE id = ?", (slot.selected_seed_question_id,)).fetchone()
-        if row is None:
+            rows = connection.execute(f"SELECT * FROM questions WHERE id IN ({placeholders})", selected_ids).fetchall()
+        by_id = {row["id"]: decode_question_row(row) for row in rows}
+        if len(by_id) != len(selected_ids):
             raise RetrievalError("A selected source question is no longer available in the question bank.")
-        question = decode_question_row(row)
-        if question["exam"] != request.exam or question["subject"] != request.subject:
-            raise RetrievalError("A selected source question does not match this paper's exam and subject.")
-        if slot.chapters and question.get("chapter") not in slot.chapters:
-            raise RetrievalError("A selected source question is outside this section's chapter selection.")
-        if slot.topic and question.get("topic") != slot.topic:
-            raise RetrievalError("A selected source question is outside this section's topic.")
-        if slot.subtopic and question.get("subtopic") != slot.subtopic:
-            raise RetrievalError("A selected source question is outside this section's subtopic.")
-        return [RetrievalCandidate(
-            id=question["id"], source_key=question["source_key"], primary_concept=question["primary_concept"],
-            question_archetype=question["question_archetype"], difficulty=question["difficulty"],
-            question_json=question["question_json"], score=1.0,
-        )]
+        candidates = []
+        for selected_id in selected_ids:
+            question = by_id[selected_id]
+            if question["exam"] != request.exam or question["subject"] != request.subject:
+                raise RetrievalError("A selected source question does not match this paper's exam and subject.")
+            if slot.chapters and question.get("chapter") not in slot.chapters:
+                raise RetrievalError("A selected source question is outside this section's chapter selection.")
+            if slot.topic and question.get("topic") != slot.topic:
+                raise RetrievalError("A selected source question is outside this section's topic.")
+            if slot.subtopic and question.get("subtopic") != slot.subtopic:
+                raise RetrievalError("A selected source question is outside this section's subtopic.")
+            candidates.append(RetrievalCandidate(
+                id=question["id"], source_key=question["source_key"], primary_concept=question["primary_concept"],
+                question_archetype=question["question_archetype"], difficulty=question["difficulty"],
+                question_json=question["question_json"], score=1.0,
+            ))
+        return candidates
 
     @staticmethod
     def _select_diverse(candidates: list[RetrievalCandidate], seed_count: int) -> list[RetrievalCandidate]:
@@ -131,8 +137,6 @@ class MetadataFirstRetriever:
                 break
             if candidate not in selected:
                 selected.append(candidate)
-        if len(selected) < 3:
-            raise RetrievalError("Not enough diverse grounding questions found. Broaden the selected topic.")
         return selected
 
 

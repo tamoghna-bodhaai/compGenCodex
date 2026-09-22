@@ -11,6 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 
 from app.api.questions import list_questions, question_catalog
+from app.db.database import get_connection
 from app.schemas.generation import GenerationRequest
 from app.services.retrieval import MetadataFirstRetriever, RetrievalError
 from app.services.seed_import import upsert_seed_questions
@@ -69,6 +70,17 @@ class QuestionCatalogTests(unittest.TestCase):
         hard = self.request(difficulty=5)
         with self.assertRaises(RetrievalError):
             retriever.retrieve(hard, hard.build_slots()[0])
+
+    def test_retrieval_accepts_a_single_compatible_seed(self) -> None:
+        request = self.request()
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT id FROM questions WHERE exam = ? AND subject = ? AND question_type = ? AND difficulty = ? LIMIT 1",
+                ("JEE", "Mathematics", "single_correct_mcq", 3),
+            ).fetchone()
+            connection.execute("DELETE FROM questions WHERE id != ?", (row["id"],))
+        seeds = MetadataFirstRetriever().retrieve(request, request.build_slots()[0])
+        self.assertEqual(len(seeds), 1)
 
 
 if __name__ == "__main__":

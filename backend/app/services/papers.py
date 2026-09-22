@@ -635,7 +635,7 @@ class PaperService:
             ref_images = paper["generation_config"].get("reference_images")
             ref_instruction = paper["generation_config"].get("reference_custom_instruction")
             if ref_questions:
-                await GenerationService(on_event=lifecycle).generate_from_reference(
+                await GenerationService(on_event=lifecycle, cost_context={"job_id": job_id, "paper_id": paper_id, "operation": "initial"}).generate_from_reference(
                     request,
                     reference_questions=ref_questions,
                     reference_images=ref_images,
@@ -645,7 +645,7 @@ class PaperService:
                     before_slot=lambda _: self._wait_until_job_can_continue(job_id),
                 )
             else:
-                await GenerationService(on_event=lifecycle).generate(
+                await GenerationService(on_event=lifecycle, cost_context={"job_id": job_id, "paper_id": paper_id, "operation": "initial"}).generate(
                     request,
                     on_slot_complete=report_progress,
                     slots=missing_slots,
@@ -721,7 +721,7 @@ class PaperService:
             questions = [question for question in paper["questions"] if not question.get("solution")]
             if not questions:
                 raise PaperConflictError("Every question already has a solution.")
-            service = GenerationService()
+            service = GenerationService(cost_context={"job_id": job_id, "paper_id": paper_id, "operation": "solutions"})
             semaphore = asyncio.Semaphore(service.settings.max_concurrent_generations)
 
             async def solve(question: dict) -> tuple[dict, Any | None, Exception | None]:
@@ -951,10 +951,15 @@ class PaperService:
         if locked:
             raise PaperConflictError("Locked questions cannot be regenerated. Unlock them first.")
         request = GenerationRequest.model_validate(paper["generation_config"])
+        configured_slots = {slot.slot: slot for slot in request.build_slots()}
         service = generation_service or GenerationService()
         for question_id in question_ids:
             current = current_by_id[question_id]
-            slot = GenerationSlot(slot=current["position"], question_type=current["question_type"], difficulty=current["difficulty"])
+            metadata = current.get("generation_metadata") or {}
+            generation_slot = metadata.get("generation_slot")
+            template = configured_slots.get(generation_slot) if isinstance(generation_slot, int) else None
+            slot = (template.model_copy(update={"question_type": current["question_type"], "difficulty": current["difficulty"]})
+                    if template else GenerationSlot(slot=current["position"], question_type=current["question_type"], difficulty=current["difficulty"]))
             reference_questions = paper["generation_config"].get("reference_questions")
             if reference_questions:
                 response = await service.generate_from_reference(
@@ -1039,6 +1044,7 @@ class PaperService:
             "origin": "generated",
             "generation_slot": result.slot.slot,
             "seed_question_ids": result.seed_question_ids,
+            "primary_seed_question_id": result.primary_seed_question_id,
             "selected_seed_question_id": result.selected_seed_question_id,
             "similarity_score": result.similarity_score,
             "generation_attempt": result.generation_attempt,

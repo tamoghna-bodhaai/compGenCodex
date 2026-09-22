@@ -13,7 +13,7 @@ Target difficulty (1-5): {difficulty}
 Variation strength: {variation_strength}
 Custom regeneration instruction: {custom_instruction or "None"}{has_image_note}
 
-Use the supplied seed questions only as grounding. Preserve the core concept, question archetype, approximate solution strategy, and reasoning depth. Change values, parameters, wording, notation, and setup enough that the result is not a paraphrase. The question must be complete, solvable, and have an answer consistent with its solution.
+Use the supplied seed questions only as grounding. The source marked primary should guide this variation; use every supporting source to preserve coverage and avoid repeating a single source's surface setup. Preserve the core concept, question archetype, approximate solution strategy, and reasoning depth. Change values, parameters, wording, notation, and setup enough that the result is not a paraphrase. The question must be complete, solvable, and have an answer consistent with its solution.
 If a reference image is attached, base the variation on the visible questions in that image and the custom instruction.
 
 Seed questions:

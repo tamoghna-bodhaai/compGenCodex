@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from app.core.error_safety import PROVIDER_FAILURE_MESSAGE
 from app.core.settings import Settings
+from app.services.costs import record_llm_cost
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -137,6 +138,7 @@ class OpenRouterClient:
         temperature: float = 0.4,
         max_tokens: int = 2400,
         images: list[str] | None = None,
+        cost_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not self.settings.openrouter_api_key or not model:
             raise ModelConfigurationError(
@@ -169,6 +171,7 @@ class OpenRouterClient:
             ],
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "usage": {"include": True},
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -179,6 +182,7 @@ class OpenRouterClient:
             },
         }
         response = await asyncio.to_thread(self._post, payload)
+        record_llm_cost(context=cost_context, response=response, requested_model=model)
         try:
             content = response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:

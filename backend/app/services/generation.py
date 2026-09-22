@@ -39,6 +39,7 @@ class _Candidate:
     slot: GenerationSlot
     question: GeneratedQuestion
     seeds: list[RetrievalCandidate]
+    primary_seed_question_id: str | None
     similarity: float
     attempt: int
     generation_model: str | None = None
@@ -85,11 +86,15 @@ def max_seed_similarity(question: GeneratedQuestion, seeds: list[RetrievalCandid
 
 class GenerationService:
     def __init__(self, *, settings: Settings | None = None, client: OpenRouterClient | None = None, retriever: MetadataFirstRetriever | None = None,
-                 on_event: Callable[[dict], Awaitable[None] | None] | None = None) -> None:
+                 on_event: Callable[[dict], Awaitable[None] | None] | None = None, cost_context: dict | None = None) -> None:
         self.settings = settings or get_settings()
         self.client = client or OpenRouterClient(self.settings)
         self.retriever = retriever or MetadataFirstRetriever()
         self.on_event = on_event
+        self.cost_context = cost_context or {}
+
+    def _cost_context(self, phase: str, slot: GenerationSlot | None = None, attempt: int | None = None) -> dict:
+        return self.cost_context | {"phase": phase, "slot": slot.slot if slot else None, "attempt": attempt}
 
     async def _event(self, **event: object) -> None:
         if self.on_event:
@@ -307,7 +312,7 @@ class GenerationService:
                     # For reference mode we relax similarity check (allow close)
                     await self._event(phase="generation", outcome="completed", slot=slot.slot, attempt=attempt, model=generation_model, duration_ms=round((time.monotonic()-started)*1000))
                     return _Candidate(
-                        slot, question, seeds, similarity, attempt,
+                        slot, question, seeds, seeds[0].id, similarity, attempt,
                         reference_question_id=reference_id,
                         reference_question_index=reference_index,
                         reference_question_number=source_number,
@@ -344,13 +349,17 @@ class GenerationService:
                         if notification is not None:
                             await notification
                     seeds = self.retriever.retrieve(request, slot)
+                    seeds, primary_seed_question_id = self._with_primary_seed(slot, seeds)
                     await self._event(phase="retrieval", outcome="completed", slot=slot.slot, attempt=attempt, model=generation_model, details={"seed_count": len(seeds)})
-                    question = await self._generate_question(request, slot, seeds, custom_instruction, generation_model=generation_model)
+                    question = await self._generate_question(
+                        request, slot, seeds, custom_instruction, generation_model=generation_model,
+                        primary_seed_question_id=primary_seed_question_id,
+                    )
                     similarity = max_seed_similarity(question, seeds)
                     if request.generation_mode == GenerationMode.CONCEPT and similarity > self.settings.max_seed_similarity:
                         raise GenerationFailure(f"Generated question is too similar to its seed pool ({similarity:.2f}).")
                     await self._event(phase="generation", outcome="completed", slot=slot.slot, attempt=attempt, model=generation_model, duration_ms=round((time.monotonic()-started)*1000))
-                    return _Candidate(slot, question, seeds, similarity, attempt, generation_model)
+                    return _Candidate(slot, question, seeds, primary_seed_question_id, similarity, attempt, generation_model)
             except (OpenRouterError, ValidationError, GenerationFailure) as error:
                 await self._event(phase="generation", outcome="failed", slot=slot.slot, attempt=attempt, model=generation_model, failure=error, duration_ms=round((time.monotonic()-started)*1000))
                 self._log(request, slot=slot, status="retrying", failure_reason=safe_error_message(error), model=generation_model)
@@ -391,6 +400,7 @@ class GenerationService:
                     slot=candidate.slot,
                     question=candidate.question,
                     seed_question_ids=[seed.id for seed in candidate.seeds],
+                    primary_seed_question_id=candidate.primary_seed_question_id,
                     selected_seed_question_id=candidate.slot.selected_seed_question_id,
                     similarity_score=candidate.similarity,
                     validation=validation,
@@ -449,7 +459,8 @@ class GenerationService:
                     user_prompt=solution.build_prompt(question=question, exam=exam, subject=subject),
                     response_schema=_schema(GeneratedSolution),
                     temperature=0.1,
-                    max_tokens=1800,
+                max_tokens=1800,
+                cost_context=self._cost_context("solution"),
                 )
                 return GeneratedSolution.model_validate(raw)
             except (OpenRouterError, ValidationError) as error:
@@ -457,8 +468,20 @@ class GenerationService:
         assert last_error is not None
         raise last_error
 
-    async def _generate_question(self, request: GenerationRequest, slot: GenerationSlot, seeds: list[RetrievalCandidate], custom_instruction: str | None = None, reference_images: list[str] | None = None, generation_model: str | None = None) -> GeneratedQuestion:
-        seed_payload = [seed.prompt_payload() for seed in seeds]
+    @staticmethod
+    def _with_primary_seed(slot: GenerationSlot, seeds: list[RetrievalCandidate]) -> tuple[list[RetrievalCandidate], str]:
+        """Choose a rotating primary source while preserving source-pool order."""
+        if not seeds:
+            raise GenerationFailure("No seed questions were available for generation.")
+        primary_id = slot.selected_seed_question_id or seeds[(slot.slot - 1) % len(seeds)].id
+        primary_index = next((index for index, seed in enumerate(seeds) if seed.id == primary_id), 0)
+        return seeds, seeds[primary_index].id
+
+    async def _generate_question(self, request: GenerationRequest, slot: GenerationSlot, seeds: list[RetrievalCandidate], custom_instruction: str | None = None, reference_images: list[str] | None = None, generation_model: str | None = None, primary_seed_question_id: str | None = None) -> GeneratedQuestion:
+        seed_payload = [
+            {**seed.prompt_payload(), "source_role": "primary" if seed.id == (primary_seed_question_id or seeds[0].id) else "supporting"}
+            for seed in seeds
+        ]
         mode = slot.generation_mode or request.generation_mode
         strength = slot.variation_strength or request.variation_strength
         if mode == GenerationMode.STRUCTURAL:
@@ -471,6 +494,7 @@ class GenerationService:
                 ),
                 response_schema=_schema(GeneratedQuestion),
                 images=reference_images,
+                cost_context=self._cost_context("generation", slot),
             )
         else:
             blueprint_raw = await self.client.call_llm(
@@ -483,6 +507,7 @@ class GenerationService:
                 response_schema=_schema(ConceptBlueprint),
                 temperature=0.3,
                 max_tokens=1200,
+                cost_context=self._cost_context("concept_blueprint", slot),
             )
             blueprint = ConceptBlueprint.model_validate(blueprint_raw)
             if blueprint.question_type != slot.question_type or blueprint.difficulty != slot.difficulty:
@@ -492,6 +517,7 @@ class GenerationService:
                 system_prompt=concept_variation.SYSTEM_PROMPT,
                 user_prompt=concept_variation.build_prompt(seeds=seed_payload, blueprint=blueprint.model_dump(), custom_instruction=custom_instruction),
                 response_schema=_schema(GeneratedQuestion),
+                cost_context=self._cost_context("generation", slot),
             )
         question = GeneratedQuestion.model_validate(raw)
         if question.question_type != slot.question_type or question.difficulty != slot.difficulty:
@@ -508,6 +534,7 @@ class GenerationService:
             ),
             response_schema=_schema(ValidationResult),
             temperature=0.0,
+            cost_context=self._cost_context("validation", slot),
         )
         return ValidationResult.model_validate(raw)
 

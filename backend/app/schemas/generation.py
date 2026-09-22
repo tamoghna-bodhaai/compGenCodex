@@ -77,6 +77,10 @@ class GenerationSlot(BaseModel):
     section_title: str | None = None
     generation_mode: GenerationMode | None = None
     variation_strength: VariationStrength | None = None
+    # All teacher-selected sources ground every variation in the section.
+    # The singular field remains the per-slot, rotating primary source for
+    # backwards-compatible consumers and clear provenance.
+    selected_seed_question_ids: list[str] = Field(default_factory=list)
     selected_seed_question_id: str | None = None
 
 
@@ -132,6 +136,7 @@ class GenerationRequest(BaseModel):
                             topic=plan.topic, subtopic=plan.subtopic, chapters=list(plan.chapters or self.chapters),
                             section_title=plan.resolved_section_title(),
                             generation_mode=plan.generation_mode, variation_strength=plan.variation_strength,
+                            selected_seed_question_ids=list(plan.seed_question_ids),
                             selected_seed_question_id=(plan.seed_question_ids[plan_slot % len(plan.seed_question_ids)] if plan.seed_question_ids else None),
                         )
                     )
@@ -196,6 +201,7 @@ class GeneratedSlotResult(BaseModel):
     slot: GenerationSlot
     question: GeneratedQuestion
     seed_question_ids: list[str]
+    primary_seed_question_id: str | None = None
     selected_seed_question_id: str | None = None
     similarity_score: float
     validation: ValidationResult
