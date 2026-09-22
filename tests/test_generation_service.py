@@ -228,6 +228,22 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertEqual(slots[0].section_title, "Definite Integrals › Properties")
         self.assertEqual(slots[2].generation_mode, "concept_variation")
 
+    def test_selected_seed_pool_rotates_without_a_question_count_cap(self) -> None:
+        request = GenerationRequest.model_validate(
+            {
+                "title": "Selected seed variations", "exam": "JEE", "subject": "Mathematics",
+                "generation_mode": "structural_variation",
+                "subtopic_plans": [{
+                    "topic": "Definite Integrals", "question_types": [{"type": "single_correct_mcq", "count": 15}],
+                    "difficulty_distribution": [{"difficulty": 3, "count": 15}],
+                    "seed_question_ids": ["seed-1", "seed-2"],
+                }],
+            }
+        )
+        slots = request.build_slots()
+        self.assertEqual(len(slots), 15)
+        self.assertEqual([slot.selected_seed_question_id for slot in slots[:5]], ["seed-1", "seed-2", "seed-1", "seed-2", "seed-1"])
+
     def test_topic_level_plan_is_valid_without_a_subtopic(self) -> None:
         request = GenerationRequest.model_validate(
             {

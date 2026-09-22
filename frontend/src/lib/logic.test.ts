@@ -24,6 +24,14 @@ describe("paper creation payload", () => {
     expect(payload.subtopic_plans[0]).not.toHaveProperty("subtopic");
     expect(payload.question_types).toEqual([{ type: "single_correct_mcq", count: 5 }]);
   });
+
+  it("includes selected bank questions as reusable variation sources", () => {
+    const creation = defaultCreation();
+    creation.chapters = ["Calculus"];
+    creation.subtopicKeys = ["Definite Integrals::Properties"];
+    creation.plans[creation.subtopicKeys[0]] = { ...defaultPlan(), seedQuestionIds: ["seed-a", "seed-b"] };
+    expect(buildCreationPayload(creation).subtopic_plans[0]).toMatchObject({ seed_question_ids: ["seed-a", "seed-b"] });
+  });
 });
 
 describe("dashboard state", () => {

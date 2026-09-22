@@ -112,6 +112,7 @@ export interface SubtopicPlanPayload {
   difficulty_distribution: Array<{ difficulty: number; count: number }>;
   generation_mode: GenerationMode;
   variation_strength: VariationStrength;
+  seed_question_ids?: string[];
 }
 
 export interface GenerationConfig {
@@ -264,6 +265,7 @@ export interface CreationPlan {
   generation_mode: GenerationMode;
   variation_strength: VariationStrength;
   sectionTitle: string;
+  seedQuestionIds: string[];
 }
 
 export interface CreationState {

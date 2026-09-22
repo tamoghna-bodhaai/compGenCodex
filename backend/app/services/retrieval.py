@@ -51,6 +51,8 @@ class MetadataFirstRetriever:
     """Metadata filter -> semantic fallback score -> archetype-diverse seed selection."""
 
     def retrieve(self, request: GenerationRequest, slot: GenerationSlot, *, candidate_limit: int = 30, seed_count: int = 5) -> list[RetrievalCandidate]:
+        if slot.selected_seed_question_id:
+            return self._retrieve_selected_seed(request, slot)
         clauses = ["exam = ?", "subject = ?", "question_type = ?"]
         parameters: list[object] = [request.exam, request.subject, slot.question_type.value]
         slot_chapters = slot.chapters or request.chapters
@@ -88,6 +90,28 @@ class MetadataFirstRetriever:
                 )
             )
         return self._select_diverse(candidates, seed_count)
+
+    @staticmethod
+    def _retrieve_selected_seed(request: GenerationRequest, slot: GenerationSlot) -> list[RetrievalCandidate]:
+        """Resolve a teacher-picked source without applying the three-seed rule."""
+        with get_connection() as connection:
+            row = connection.execute("SELECT * FROM questions WHERE id = ?", (slot.selected_seed_question_id,)).fetchone()
+        if row is None:
+            raise RetrievalError("A selected source question is no longer available in the question bank.")
+        question = decode_question_row(row)
+        if question["exam"] != request.exam or question["subject"] != request.subject:
+            raise RetrievalError("A selected source question does not match this paper's exam and subject.")
+        if slot.chapters and question.get("chapter") not in slot.chapters:
+            raise RetrievalError("A selected source question is outside this section's chapter selection.")
+        if slot.topic and question.get("topic") != slot.topic:
+            raise RetrievalError("A selected source question is outside this section's topic.")
+        if slot.subtopic and question.get("subtopic") != slot.subtopic:
+            raise RetrievalError("A selected source question is outside this section's subtopic.")
+        return [RetrievalCandidate(
+            id=question["id"], source_key=question["source_key"], primary_concept=question["primary_concept"],
+            question_archetype=question["question_archetype"], difficulty=question["difficulty"],
+            question_json=question["question_json"], score=1.0,
+        )]
 
     @staticmethod
     def _select_diverse(candidates: list[RetrievalCandidate], seed_count: int) -> list[RetrievalCandidate]:

@@ -33,6 +33,7 @@ export const defaultPlan = (): CreationPlan => ({
   generation_mode: "structural_variation",
   variation_strength: "balanced",
   sectionTitle: "",
+  seedQuestionIds: [],
 });
 
 export const defaultCreation = (): CreationState => ({
@@ -74,6 +75,7 @@ export function buildCreationPayload(creation: CreationState) {
       difficulty_distribution: DIFFICULTIES.map(([planKey, , difficulty]) => ({ difficulty, count: Number(plan.difficultyCounts[planKey]) || 0 })).filter((item) => item.count > 0),
       generation_mode: plan.generation_mode,
       variation_strength: plan.variation_strength,
+      ...(plan.seedQuestionIds.length ? { seed_question_ids: plan.seedQuestionIds } : {}),
     };
   });
   const typeTotals = new Map<QuestionType, number>();

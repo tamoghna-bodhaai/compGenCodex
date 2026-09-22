@@ -89,6 +89,7 @@ class PaperService:
             emit_event(job_id=job["id"], paper_id=job["paper_id"], operation=job["operation"], phase="job", outcome="interrupted", failure="interrupted")
 
     def create(self, request: PaperCreateRequest) -> dict:
+        self._validate_selected_seed_questions(request)
         paper_id = str(uuid.uuid4())
         now = _now()
         with get_connection() as connection:
@@ -99,6 +100,30 @@ class PaperService:
         if request.subtopic_plans:
             self._ensure_plan_sections(paper_id, request)
         return self.get(paper_id)
+
+    @staticmethod
+    def _validate_selected_seed_questions(request: GenerationRequest) -> None:
+        """Reject missing or out-of-scope teacher-selected seed IDs."""
+        for plan in request.subtopic_plans or []:
+            if not plan.seed_question_ids:
+                continue
+            if len(set(plan.seed_question_ids)) != len(plan.seed_question_ids):
+                raise PaperConflictError("A section cannot select the same source question more than once.")
+            placeholders = ",".join("?" for _ in plan.seed_question_ids)
+            with get_connection() as connection:
+                rows = connection.execute(
+                    f"SELECT id, exam, subject, chapter, topic, subtopic FROM questions WHERE id IN ({placeholders})",
+                    plan.seed_question_ids,
+                ).fetchall()
+            if len(rows) != len(plan.seed_question_ids):
+                raise PaperConflictError("One or more selected source questions are no longer available.")
+            for row in rows:
+                if row["exam"] != request.exam or row["subject"] != request.subject or row["topic"] != plan.topic:
+                    raise PaperConflictError("A selected source question is outside this section's taxonomy.")
+                if plan.subtopic is not None and row["subtopic"] != plan.subtopic:
+                    raise PaperConflictError("A selected source question is outside this section's subtopic.")
+                if plan.chapters and row["chapter"] not in plan.chapters:
+                    raise PaperConflictError("A selected source question is outside this section's chapter selection.")
 
     def list(self) -> list[dict]:
         with get_connection() as connection:
@@ -1014,6 +1039,7 @@ class PaperService:
             "origin": "generated",
             "generation_slot": result.slot.slot,
             "seed_question_ids": result.seed_question_ids,
+            "selected_seed_question_id": result.selected_seed_question_id,
             "similarity_score": result.similarity_score,
             "generation_attempt": result.generation_attempt,
             "validation": result.validation.model_dump(),

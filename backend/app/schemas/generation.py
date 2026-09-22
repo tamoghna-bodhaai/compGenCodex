@@ -25,12 +25,12 @@ class VariationStrength(StrEnum):
 
 class QuestionTypeCount(BaseModel):
     type: QuestionType
-    count: int = Field(ge=1, le=100)
+    count: int = Field(ge=1)
 
 
 class DifficultyCount(BaseModel):
     difficulty: int = Field(ge=1, le=5)
-    count: int = Field(ge=1, le=100)
+    count: int = Field(ge=1)
 
 
 class SubtopicPlanItem(BaseModel):
@@ -45,6 +45,7 @@ class SubtopicPlanItem(BaseModel):
     difficulty_distribution: list[DifficultyCount]
     generation_mode: GenerationMode | None = None
     variation_strength: VariationStrength | None = None
+    seed_question_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def plan_distributions_have_equal_totals(self) -> "SubtopicPlanItem":
@@ -76,6 +77,7 @@ class GenerationSlot(BaseModel):
     section_title: str | None = None
     generation_mode: GenerationMode | None = None
     variation_strength: VariationStrength | None = None
+    selected_seed_question_id: str | None = None
 
 
 class GenerationRequest(BaseModel):
@@ -123,13 +125,14 @@ class GenerationRequest(BaseModel):
             for plan in self.subtopic_plans:
                 types = [item.type for item in plan.question_types for _ in range(item.count)]
                 difficulties = [item.difficulty for item in plan.difficulty_distribution for _ in range(item.count)]
-                for question_type, difficulty in zip(types, difficulties, strict=True):
+                for plan_slot, (question_type, difficulty) in enumerate(zip(types, difficulties, strict=True)):
                     slots.append(
                         GenerationSlot(
                             slot=len(slots) + 1, question_type=question_type, difficulty=difficulty,
                             topic=plan.topic, subtopic=plan.subtopic, chapters=list(plan.chapters or self.chapters),
                             section_title=plan.resolved_section_title(),
                             generation_mode=plan.generation_mode, variation_strength=plan.variation_strength,
+                            selected_seed_question_id=(plan.seed_question_ids[plan_slot % len(plan.seed_question_ids)] if plan.seed_question_ids else None),
                         )
                     )
             return slots
@@ -193,6 +196,7 @@ class GeneratedSlotResult(BaseModel):
     slot: GenerationSlot
     question: GeneratedQuestion
     seed_question_ids: list[str]
+    selected_seed_question_id: str | None = None
     similarity_score: float
     validation: ValidationResult
     generation_attempt: int

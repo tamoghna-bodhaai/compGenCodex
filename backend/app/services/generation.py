@@ -391,6 +391,7 @@ class GenerationService:
                     slot=candidate.slot,
                     question=candidate.question,
                     seed_question_ids=[seed.id for seed in candidate.seeds],
+                    selected_seed_question_id=candidate.slot.selected_seed_question_id,
                     similarity_score=candidate.similarity,
                     validation=validation,
                     generation_attempt=candidate.attempt,

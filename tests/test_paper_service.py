@@ -157,6 +157,23 @@ class PaperServiceTests(unittest.TestCase):
         self.assertEqual([section["title"] for section in paper["sections"]], ["Section A · Properties", "Definite Integrals › Area"])
         self.assertEqual(paper["requested_question_count"], 3)
 
+    def test_selected_source_questions_must_exist_and_match_plan_scope(self) -> None:
+        with get_connection() as connection:
+            seed_id = connection.execute("SELECT id FROM questions WHERE topic = 'Definite Integrals' LIMIT 1").fetchone()[0]
+        payload = {
+            "title": "Selected source", "exam": "JEE", "subject": "Mathematics", "chapters": ["Calculus"],
+            "generation_mode": "structural_variation",
+            "subtopic_plans": [{
+                "topic": "Definite Integrals", "question_types": [{"type": "single_correct_mcq", "count": 15}],
+                "difficulty_distribution": [{"difficulty": 3, "count": 15}], "seed_question_ids": [seed_id],
+            }],
+        }
+        created = self.service.create(PaperCreateRequest.model_validate(payload))
+        self.assertEqual(created["generation_config"]["subtopic_plans"][0]["seed_question_ids"], [seed_id])
+        payload["subtopic_plans"][0]["seed_question_ids"] = ["not-a-real-seed"]
+        with self.assertRaises(PaperConflictError):
+            self.service.create(PaperCreateRequest.model_validate(payload))
+
     def test_queued_generation_job_is_visible_on_paper_and_dashboard_summary(self) -> None:
         job = self.service.queue_initial_generation(self.paper["id"])
         self.assertEqual(job["state"], "queued")
