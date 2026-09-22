@@ -62,6 +62,7 @@ export function QuestionBankScreen() {
   async function ingest(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (submitting) return; setSubmitting(true);
     const values = new FormData(event.currentTarget); const file = values.get("file") as File | null; const text = String(values.get("source_text") || "").trim();
+    if (file && file.size > 35 * 1024 * 1024) { toast("Uploads must be 35 MB or smaller.", "error"); setSubmitting(false); return; }
     if ((!file || !file.size) && !text) { toast("Upload a PDF/DOCX or paste question text.", "error"); setSubmitting(false); return; }
     try {
       const result = await api.ingest(values);

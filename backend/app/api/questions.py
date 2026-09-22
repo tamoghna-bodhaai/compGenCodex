@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, status
 
 from app.db.database import decode_question_row, get_connection
 from app.services.ingestion import IngestionError, MAX_UPLOAD_BYTES, QuestionIngestionService
@@ -11,6 +11,7 @@ router = APIRouter(prefix="/api/questions", tags=["questions"])
 
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_questions(
+    background_tasks: BackgroundTasks,
     source_text: str = Form(default=""),
     conversion_note: str = Form(default=""),
     file: UploadFile | None = File(default=None),
@@ -25,7 +26,10 @@ async def ingest_questions(
         service = QuestionIngestionService()
         service.ensure_configuration()
         job = service.create_job(filename, content=content, content_type=file.content_type if file else None, source_text=source_text, conversion_note=conversion_note)
-        QuestionIngestionService.enqueue(job["id"])
+        # Starlette runs background tasks only after the 202 response is sent.
+        # PDF extraction/OCR is synchronous and can otherwise block this API
+        # worker before the frontend proxy receives the accepted job.
+        background_tasks.add_task(QuestionIngestionService().run_job, job["id"])
         return {"job": job}
     except ModelConfigurationError as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
