@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
 
 from app.db.database import decode_question_row, get_connection
 from app.services.ingestion import IngestionError, MAX_UPLOAD_BYTES, QuestionIngestionService
@@ -9,13 +9,8 @@ from app.services.openrouter import ModelConfigurationError, OpenRouterError
 router = APIRouter(prefix="/api/questions", tags=["questions"])
 
 
-async def _run_ingestion_job(job_id: str, **payload: object) -> None:
-    await QuestionIngestionService().run_job(job_id, **payload)  # type: ignore[arg-type]
-
-
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_questions(
-    background_tasks: BackgroundTasks,
     source_text: str = Form(default=""),
     conversion_note: str = Form(default=""),
     file: UploadFile | None = File(default=None),
@@ -29,11 +24,8 @@ async def ingest_questions(
             raise IngestionError("Uploads must be 35 MB or smaller.")
         service = QuestionIngestionService()
         service.ensure_configuration()
-        job = service.create_job(filename)
-        background_tasks.add_task(
-            _run_ingestion_job, job["id"], filename=filename, content_type=file.content_type if file else None,
-            content=content, source_text=source_text, conversion_note=conversion_note,
-        )
+        job = service.create_job(filename, content=content, content_type=file.content_type if file else None, source_text=source_text, conversion_note=conversion_note)
+        QuestionIngestionService.enqueue(job["id"])
         return {"job": job}
     except ModelConfigurationError as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
@@ -50,6 +42,38 @@ def list_ingestion_jobs(limit: int = 20) -> dict:
 def get_ingestion_job(job_id: str) -> dict:
     try:
         return QuestionIngestionService().get_job(job_id)
+    except IngestionError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+
+@router.post("/ingestion-jobs/{job_id}/pause")
+def pause_ingestion_job(job_id: str) -> dict:
+    try:
+        return {"job": QuestionIngestionService().pause_job(job_id)}
+    except IngestionError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+
+@router.post("/ingestion-jobs/{job_id}/resume")
+def resume_ingestion_job(job_id: str) -> dict:
+    try:
+        return {"job": QuestionIngestionService().resume_job(job_id)}
+    except IngestionError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+
+@router.post("/ingestion-jobs/{job_id}/cancel")
+def cancel_ingestion_job(job_id: str) -> dict:
+    try:
+        return {"job": QuestionIngestionService().cancel_job(job_id)}
+    except IngestionError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+
+@router.get("/ingestion-jobs/{job_id}/report")
+def ingestion_report(job_id: str) -> dict:
+    try:
+        return QuestionIngestionService().report(job_id)
     except IngestionError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 

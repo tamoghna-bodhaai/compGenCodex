@@ -28,6 +28,12 @@ export interface IngestionJob {
   completed_chunks?: number;
   ingested_questions?: number;
   error_message?: string;
+  control_state?: ControlState;
+  result_status?: "pending" | "succeeded" | "partial" | "cancelled";
+  accepted_questions?: number;
+  review_questions?: number;
+  skipped_chunks?: number;
+  retryable_chunks?: number;
 }
 
 export interface QuestionJson {

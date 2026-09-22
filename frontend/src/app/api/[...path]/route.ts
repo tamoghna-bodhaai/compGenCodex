@@ -33,7 +33,10 @@ async function proxyToBackend(request: NextRequest) {
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");
 
-  return new NextResponse(backendResponse.body, {
+  // A 204 response cannot carry a body. Passing a stream here makes Next's
+  // Response constructor throw and turns a successful logout into a 500.
+  const responseBody = backendResponse.status === 204 || backendResponse.status === 304 ? null : backendResponse.body;
+  return new NextResponse(responseBody, {
     status: backendResponse.status,
     statusText: backendResponse.statusText,
     headers: responseHeaders,

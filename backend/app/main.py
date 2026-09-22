@@ -47,10 +47,11 @@ async def require_authenticated_api_session(request: Request, call_next):
 
 
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
     initialize_database()
     PaperService.recover_interrupted_generation_jobs()
     QuestionIngestionService.recover_interrupted_jobs()
+    QuestionIngestionService.enqueue_recoverable_jobs()
     cleanup_events()
 
 

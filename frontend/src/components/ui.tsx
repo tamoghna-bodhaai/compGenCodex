@@ -52,20 +52,24 @@ export function JobProgress({ job, onPause, onResume, onCancel }: { job: Generat
   </div>;
 }
 
-export function IngestionProgress({ job }: { job: IngestionJob }) {
-  const active = ["queued", "running"].includes(job.state);
+export function IngestionProgress({ job, onPause, onResume, onCancel }: { job: IngestionJob; onPause?: () => void; onResume?: () => void; onCancel?: () => void }) {
+  const paused = job.control_state === "paused";
+  const cancelled = job.control_state === "cancelled";
+  const active = ["queued", "running"].includes(job.state) && !cancelled;
   const total = job.total_chunks || 0;
   const completed = Math.min(job.completed_chunks || 0, total);
   const percent = total ? Math.round(completed / total * 100) : 0;
-  const title = active ? "Question ingestion in progress" : job.state === "failed" ? "Question ingestion needs attention" : "Latest question ingestion";
+  const title = paused ? "Question ingestion paused" : cancelled ? "Question ingestion cancelled" : active ? "Question ingestion in progress" : job.result_status === "partial" ? "Question ingestion partially complete" : job.state === "failed" ? "Question ingestion needs attention" : "Latest question ingestion";
   const progressLabel = total ? `${completed} of ${total} source chunks classified` : "Preparing source chunks";
   const progressStatus = job.state === "failed" ? "Import failed" : `${percent}% complete`;
   return <div className={`${s.ingestionProgress} ${s[`job_${job.state}`]}`}>
     <div className={s.ingestionSummary}>
       <div className={s.ingestionStatus}><span className={`${s.liveDot} ${active ? s.pulse : ""}`} /><div><div className={s.ingestionTitle}><strong>{title}</strong>{total > 0 && <span className={`${s.ingestionPercent} ${job.state === "failed" ? s.ingestionPercentFailed : ""}`}>{progressStatus}</span>}</div><span>{job.message || job.phase || "Preparing your source"}</span></div></div>
     </div>
-    {active && <div className={s.ingestionTrack} role="progressbar" aria-label={progressLabel} aria-valuemin={0} aria-valuemax={total || undefined} aria-valuenow={total ? completed : undefined}><span style={{ width: `${percent}%` }} /></div>}
-    <div className={s.ingestionMeta}><span>{total ? progressLabel : "Organizing the source for classification"}</span>{job.ingested_questions ? <strong>{job.ingested_questions} questions found</strong> : null}</div>
+    {active && !paused && <div className={s.ingestionTrack} role="progressbar" aria-label={progressLabel} aria-valuemin={0} aria-valuemax={total || undefined} aria-valuenow={total ? completed : undefined}><span style={{ width: `${percent}%` }} /></div>}
+    <div className={s.ingestionMeta}><span>{total ? progressLabel : "Organizing the source for classification"}</span>{job.accepted_questions ? <strong>{job.accepted_questions} accepted</strong> : job.ingested_questions ? <strong>{job.ingested_questions} questions found</strong> : null}</div>
+    {(job.review_questions || job.skipped_chunks) ? <div className={s.ingestionMeta}><span>{job.review_questions || 0} need review · {job.skipped_chunks || 0} chunks skipped</span></div> : null}
+    {active && (onPause || onResume || onCancel) ? <div className={s.inlineActions}>{paused ? <Button size="small" tone="primary" onClick={onResume}>Resume</Button> : <Button size="small" onClick={onPause}>Pause</Button>}<Button size="small" tone="danger" onClick={onCancel}>Cancel</Button></div> : null}
     {job.error_message && <div className={s.ingestionError} role="alert"><strong>Import error</strong><span>{job.error_message}</span></div>}
   </div>;
 }

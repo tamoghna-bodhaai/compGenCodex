@@ -21,9 +21,14 @@ function Shell({ children }: { children: React.ReactNode }) {
   if (pathname === "/login") return <>{children}</>;
   const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
   const signOut = async () => {
-    await api.logout();
-    router.replace("/login");
-    router.refresh();
+    try {
+      await api.logout();
+      router.replace("/login");
+      router.refresh();
+    } catch {
+      // Do not redirect while the server may still consider the cookie valid.
+      window.alert("Couldn’t sign out. Please try again.");
+    }
   };
   return <div className={s.shell}>
     <aside className={s.sidebar}>

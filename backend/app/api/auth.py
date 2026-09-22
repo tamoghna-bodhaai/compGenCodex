@@ -43,7 +43,8 @@ def login(payload: LoginRequest, response: Response) -> SessionResponse:
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response) -> Response:
-    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", httponly=True, samesite="lax")
+    settings = _settings_or_503()
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", httponly=True, secure=settings.cookie_secure, samesite="lax")
     return response
 
 

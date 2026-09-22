@@ -115,6 +115,38 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ingestion_jobs_created_idx ON ingestion_jobs (created_at DESC);
+CREATE TABLE IF NOT EXISTS ingestion_chunks (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    source_text TEXT NOT NULL,
+    images_json TEXT,
+    state TEXT NOT NULL DEFAULT 'queued',
+    question_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(job_id, position)
+);
+CREATE INDEX IF NOT EXISTS ingestion_chunks_job_idx ON ingestion_chunks (job_id, position);
+CREATE TABLE IF NOT EXISTS ingestion_candidates (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL REFERENCES ingestion_chunks(id) ON DELETE CASCADE,
+    source_page INTEGER,
+    source_question_number INTEGER,
+    payload_json TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    status TEXT NOT NULL,
+    validation_notes TEXT NOT NULL DEFAULT '',
+    promoted_question_id TEXT,
+    model TEXT,
+    provider TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ingestion_candidates_job_idx ON ingestion_candidates (job_id, status);
 CREATE TABLE IF NOT EXISTS branding_profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -214,6 +246,21 @@ def initialize_database(path: Path | None = None) -> Path:
             )
         if "last_activity_at" not in job_columns:
             connection.execute("ALTER TABLE paper_generation_jobs ADD COLUMN last_activity_at TEXT")
+        ingestion_columns = {row[1] for row in connection.execute("PRAGMA table_info(ingestion_jobs)")}
+        for column, definition in (
+            ("control_state", "TEXT NOT NULL DEFAULT 'active'"),
+            ("result_status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("accepted_questions", "INTEGER NOT NULL DEFAULT 0"),
+            ("review_questions", "INTEGER NOT NULL DEFAULT 0"),
+            ("skipped_chunks", "INTEGER NOT NULL DEFAULT 0"),
+            ("retryable_chunks", "INTEGER NOT NULL DEFAULT 0"),
+            ("source_content", "BLOB"),
+            ("source_content_type", "TEXT"),
+            ("source_text", "TEXT"),
+            ("conversion_note", "TEXT"),
+        ):
+            if column not in ingestion_columns:
+                connection.execute(f"ALTER TABLE ingestion_jobs ADD COLUMN {column} {definition}")
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(papers)")}
         if "branding_template_id" not in paper_columns:
             connection.execute("ALTER TABLE papers ADD COLUMN branding_template_id TEXT")

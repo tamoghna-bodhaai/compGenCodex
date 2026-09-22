@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import base64
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -246,6 +248,21 @@ def chunk_source(source: ExtractedSource) -> list[str]:
 
 
 class QuestionIngestionService:
+    _tasks: dict[str, asyncio.Task[None]] = {}
+
+    @classmethod
+    def enqueue(cls, job_id: str) -> None:
+        task = cls._tasks.get(job_id)
+        if task is None or task.done():
+            cls._tasks[job_id] = asyncio.create_task(cls().run_job(job_id), name=f"ingestion-{job_id}")
+
+    @classmethod
+    def enqueue_recoverable_jobs(cls) -> None:
+        with get_connection() as connection:
+            rows = connection.execute("SELECT id FROM ingestion_jobs WHERE state = 'queued' AND control_state = 'active'").fetchall()
+        for row in rows:
+            cls.enqueue(row["id"])
+
     @staticmethod
     def ensure_configuration() -> None:
         """Reject jobs that cannot start before promising that they were accepted."""
@@ -257,24 +274,24 @@ class QuestionIngestionService:
 
     @staticmethod
     def recover_interrupted_jobs() -> None:
-        """Background ingestion is process-local; surface interrupted work honestly."""
+        """Requeue interrupted work; source and checkpoints are durable."""
         now = _now()
         with get_connection() as connection:
-            jobs = connection.execute("SELECT id FROM ingestion_jobs WHERE state IN ('queued', 'running')").fetchall()
+            jobs = connection.execute("SELECT id FROM ingestion_jobs WHERE state = 'running' AND control_state = 'active'").fetchall()
             connection.execute(
-                "UPDATE ingestion_jobs SET state = 'failed', phase = 'failed', message = 'Ingestion stopped because the backend restarted.', "
-                "error_message = '', finished_at = ?, updated_at = ? WHERE state IN ('queued', 'running')",
-                (now, now),
+                "UPDATE ingestion_jobs SET state = 'queued', phase = 'queued', message = 'Recovering after backend restart', updated_at = ? WHERE state = 'running' AND control_state = 'active'",
+                (now,),
             )
         for job in jobs:
-            emit_event(job_id=job["id"], paper_id=None, operation="ingestion", phase="job", outcome="interrupted", failure="interrupted")
+            emit_event(job_id=job["id"], paper_id=None, operation="ingestion", phase="job", outcome="requeued", failure="interrupted")
 
-    def create_job(self, source_name: str) -> dict:
+    def create_job(self, source_name: str, *, content: bytes = b"", content_type: str | None = None,
+                   source_text: str = "", conversion_note: str = "") -> dict:
         job_id, now = str(uuid.uuid4()), _now()
         with get_connection() as connection:
             connection.execute(
-                "INSERT INTO ingestion_jobs (id, source_name, state, phase, message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (job_id, source_name or "pasted-question.txt", "queued", "queued", "Queued for ingestion", now, now),
+                "INSERT INTO ingestion_jobs (id, source_name, state, phase, message, source_content, source_content_type, source_text, conversion_note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (job_id, source_name or "pasted-question.txt", "queued", "queued", "Queued for ingestion", content, content_type, source_text, conversion_note, now, now),
             )
         emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="queue", outcome="accepted")
         return self.get_job(job_id)
@@ -285,6 +302,9 @@ class QuestionIngestionService:
         if row is None:
             raise IngestionError("Ingestion job not found.")
         item = dict(row)
+        # Source bytes are durable worker input, never API output.
+        for internal in ("source_content", "source_text", "conversion_note", "source_content_type"):
+            item.pop(internal, None)
         if item.get("error_message"):
             item["error_message"] = safe_error_message(item["error_message"])
         return item
@@ -304,12 +324,44 @@ class QuestionIngestionService:
                 raise IngestionError("An active ingestion update cannot be deleted.")
             connection.execute("DELETE FROM ingestion_jobs WHERE id = ?", (job_id,))
 
+    def pause_job(self, job_id: str) -> dict:
+        job = self.get_job(job_id)
+        if job["state"] not in {"queued", "running"}:
+            raise IngestionError("Only active ingestion jobs can be paused.")
+        self._update_job(job_id, state="queued", phase="paused", control_state="paused", message="Paused; completed chunks are retained.")
+        return self.get_job(job_id)
+
+    def resume_job(self, job_id: str) -> dict:
+        job = self.get_job(job_id)
+        if job.get("control_state") != "paused":
+            raise IngestionError("This ingestion job is not paused.")
+        self._update_job(job_id, state="queued", phase="queued", control_state="active", message="Queued to resume from the next unfinished chunk")
+        self.enqueue(job_id)
+        return self.get_job(job_id)
+
+    def cancel_job(self, job_id: str) -> dict:
+        job = self.get_job(job_id)
+        if job["state"] not in {"queued", "running"}:
+            raise IngestionError("Only active ingestion jobs can be cancelled.")
+        self._update_job(job_id, state="failed", phase="cancelled", control_state="cancelled", result_status="cancelled", message="Cancelled; accepted questions and report are retained.", finished=True)
+        return self.get_job(job_id)
+
+    def report(self, job_id: str) -> dict:
+        job = self.get_job(job_id)
+        with get_connection() as connection:
+            chunks = [dict(row) for row in connection.execute("SELECT position, state, question_count, error_message, attempts FROM ingestion_chunks WHERE job_id = ? ORDER BY position", (job_id,)).fetchall()]
+            candidates = [dict(row) for row in connection.execute("SELECT source_page, source_question_number, confidence, status, validation_notes FROM ingestion_candidates WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()]
+        return {"job": job, "summary": {"accepted": job.get("accepted_questions", 0), "review_needed": job.get("review_questions", 0), "skipped_chunks": job.get("skipped_chunks", 0), "retryable_chunks": job.get("retryable_chunks", 0)}, "chunks": chunks, "candidates": candidates}
+
     def _update_job(self, job_id: str, *, state: str | None = None, phase: str | None = None, message: str | None = None,
                     total_chunks: int | None = None, completed_chunks: int | None = None, ingested_questions: int | None = None,
-                    error_message: str | None = None, started: bool = False, finished: bool = False) -> None:
+                    error_message: str | None = None, started: bool = False, finished: bool = False,
+                    control_state: str | None = None, result_status: str | None = None,
+                    accepted_questions: int | None = None, review_questions: int | None = None,
+                    skipped_chunks: int | None = None, retryable_chunks: int | None = None) -> None:
         updates: dict[str, Any] = {"updated_at": _now()}
         for key, value in (("state", state), ("phase", phase), ("message", message), ("total_chunks", total_chunks),
-                           ("completed_chunks", completed_chunks), ("ingested_questions", ingested_questions), ("error_message", error_message)):
+                           ("completed_chunks", completed_chunks), ("ingested_questions", ingested_questions), ("error_message", error_message), ("control_state", control_state), ("result_status", result_status), ("accepted_questions", accepted_questions), ("review_questions", review_questions), ("skipped_chunks", skipped_chunks), ("retryable_chunks", retryable_chunks)):
             if value is not None:
                 updates[key] = value
         if started:
@@ -320,8 +372,21 @@ class QuestionIngestionService:
             assignments = ", ".join(f"{key} = ?" for key in updates)
             connection.execute(f"UPDATE ingestion_jobs SET {assignments} WHERE id = ?", [*updates.values(), job_id])
 
-    async def run_job(self, job_id: str, *, filename: str, content_type: str | None, content: bytes, source_text: str, conversion_note: str) -> None:
-        self._update_job(job_id, state="running", phase="extracting", message="Extracting readable text", started=True)
+    async def run_job(self, job_id: str, *, filename: str | None = None, content_type: str | None = None,
+                      content: bytes | None = None, source_text: str | None = None, conversion_note: str | None = None) -> None:
+        with get_connection() as connection:
+            row = connection.execute("SELECT * FROM ingestion_jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise IngestionError("Ingestion job not found.")
+        persisted = dict(row)
+        if persisted.get("control_state") != "active":
+            return
+        filename = filename or persisted["source_name"]
+        content_type = content_type if content_type is not None else persisted.get("source_content_type")
+        content = content if content is not None else (persisted.get("source_content") or b"")
+        source_text = source_text if source_text is not None else (persisted.get("source_text") or "")
+        conversion_note = conversion_note if conversion_note is not None else (persisted.get("conversion_note") or "")
+        self._update_job(job_id, state="running", phase="extracting", message="Extracting readable text", started=not bool(persisted.get("started_at")))
         emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="extraction", outcome="started")
 
         async def progress(phase: str, message: str, total_chunks: int | None = None, completed_chunks: int | None = None) -> None:
@@ -330,9 +395,18 @@ class QuestionIngestionService:
         try:
             result = await self.ingest(filename=filename, content_type=content_type, content=content, source_text=source_text,
                                        conversion_note=conversion_note, on_progress=progress, job_id=job_id)
-            self._update_job(job_id, state="succeeded", phase="complete", message="Ingestion complete", ingested_questions=result["questions"], finished=True)
+            if self.get_job(job_id).get("control_state") != "active":
+                return
+            with get_connection() as connection:
+                accepted = connection.execute("SELECT COUNT(*) FROM ingestion_candidates WHERE job_id = ? AND status = 'accepted'", (job_id,)).fetchone()[0]
+                review = connection.execute("SELECT COUNT(*) FROM ingestion_candidates WHERE job_id = ? AND status = 'review'", (job_id,)).fetchone()[0]
+                skipped = connection.execute("SELECT COUNT(*) FROM ingestion_chunks WHERE job_id = ? AND state = 'failed'", (job_id,)).fetchone()[0]
+            result_status = "partial" if skipped or review else result.get("result_status", "succeeded")
+            self._update_job(job_id, state="succeeded", phase="complete", result_status=result_status, message=("Partial ingestion complete; review the report." if result_status == "partial" else "Ingestion complete"), ingested_questions=accepted, accepted_questions=accepted, review_questions=review, skipped_chunks=skipped, retryable_chunks=skipped, finished=True)
             emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="job", outcome="succeeded")
         except Exception as error:  # Background work must surface a user-safe failure state.
+            if self.get_job(job_id).get("control_state") == "cancelled":
+                return
             self._update_job(
                 job_id,
                 state="failed",
@@ -376,6 +450,13 @@ class QuestionIngestionService:
             ]
         else:
             chunks = [(chunk, None) for chunk in chunk_source(source)]
+        if job_id:
+            now = _now()
+            with get_connection() as connection:
+                existing = connection.execute("SELECT COUNT(*) FROM ingestion_chunks WHERE job_id = ?", (job_id,)).fetchone()[0]
+                if not existing:
+                    for position, (chunk_text, chunk_images) in enumerate(chunks, 1):
+                        connection.execute("INSERT INTO ingestion_chunks (id, job_id, position, source_text, images_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (str(uuid.uuid4()), job_id, position, chunk_text, json.dumps(chunk_images) if chunk_images else None, now, now))
         if on_progress:
             notification = on_progress("classifying", f"Classifying 0 of {len(chunks)} source chunks", len(chunks), 0)
             if notification is not None:
@@ -386,9 +467,23 @@ class QuestionIngestionService:
         # via CLASSIFICATION_MODEL (e.g. google/gemini-flash-3.5), fallback via
         # CLASSIFICATION_FALLBACK_MODEL. Generation/validation models stay separate.
         client = OpenRouterClient(settings)
-        collection_id = f"ingested-{uuid.uuid4().hex[:12]}"
+        collection_id = f"ingested-{job_id[:12]}" if job_id else f"ingested-{uuid.uuid4().hex[:12]}"
         normalized: list[dict] = []
+        review_questions = 0
+        skipped_chunks = 0
+        inserted_total = 0
+        updated_total = 0
         for chunk_number, (chunk, images) in enumerate(chunks, 1):
+            if job_id:
+                control = self.get_job(job_id).get("control_state")
+                if control != "active":
+                    return {"collection_id": collection_id, "source": source.name, "inserted": 0, "updated": 0, "questions": 0, "result_status": control}
+                with get_connection() as connection:
+                    chunk_row = connection.execute("SELECT id, state FROM ingestion_chunks WHERE job_id = ? AND position = ?", (job_id, chunk_number)).fetchone()
+                    if chunk_row and chunk_row["state"] == "succeeded":
+                        continue
+                    if chunk_row:
+                        connection.execute("UPDATE ingestion_chunks SET state = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ?", (_now(), chunk_row["id"]))
             models_to_try: list[str | None] = []
             if primary_model:
                 models_to_try.append(primary_model)
@@ -429,14 +524,25 @@ class QuestionIngestionService:
                     emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="fallback", outcome="scheduled", slot=chunk_number, model=fallback_model, model_role="fallback")
                     continue
             if classified is None:
-                if isinstance(last_error, OpenRouterError):
-                    raise last_error
-                if last_error is not None:
-                    raise OpenRouterError(str(last_error)) from last_error
-                raise OpenRouterError("Classification failed with no response.")
+                skipped_chunks += 1
+                if job_id:
+                    with get_connection() as connection:
+                        connection.execute("UPDATE ingestion_chunks SET state = 'failed', error_message = ?, updated_at = ? WHERE job_id = ? AND position = ?", (safe_error_message(last_error or OpenRouterError("Classification failed with no response.")), _now(), job_id, chunk_number))
+                continue
+            chunk_normalized: list[dict] = []
             for question in classified.questions:
                 index = len(normalized) + 1
                 record = question.model_dump()
+                quality_note = None
+                if len(str(record.get("stem", "")).strip()) < 12 or re.search(r"\b(unreadable|illegible|\?\?\?)\b", str(record.get("stem", "")), re.IGNORECASE):
+                    quality_note = "Transcription is ambiguous or too short for automatic promotion."
+                if job_id:
+                    with get_connection() as connection:
+                        chunk_id = connection.execute("SELECT id FROM ingestion_chunks WHERE job_id = ? AND position = ?", (job_id, chunk_number)).fetchone()["id"]
+                        connection.execute("INSERT INTO ingestion_candidates (id, job_id, chunk_id, source_page, source_question_number, payload_json, confidence, status, validation_notes, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (str(uuid.uuid4()), job_id, chunk_id, record.get("source_page"), record.get("source_question_number"), json.dumps(record), "high" if not quality_note else "review", "accepted" if not quality_note else "review", quality_note or "Passed structured schema and deterministic quality checks.", primary_model, _now(), _now()))
+                if quality_note:
+                    review_questions += 1
+                    continue
                 record.update({
                     "source_key": f"{collection_id}-q{index:04d}",
                     "source_reference": f"{source.name} - page {question.source_page or 'not stated'}, question {question.source_question_number}",
@@ -448,22 +554,40 @@ class QuestionIngestionService:
                 for key in ("stem", "options", "correct_answer", "source_question_number", "source_page"):
                     record.pop(key, None)
                 normalized.append(record)
+                chunk_normalized.append(record)
+            # Checkpoint accepted questions before moving to the next chunk so
+            # cancellation/restart cannot discard completed useful work.
+            if chunk_normalized:
+                inserted_chunk, updated_chunk = upsert_questions(chunk_normalized)
+                inserted_total += inserted_chunk
+                updated_total += updated_chunk
+            if job_id:
+                with get_connection() as connection:
+                    connection.execute("UPDATE ingestion_chunks SET state = 'succeeded', question_count = ?, updated_at = ? WHERE job_id = ? AND position = ?", (len(classified.questions), _now(), job_id, chunk_number))
             if on_progress:
                 notification = on_progress("classifying", f"Classified {chunk_number} of {len(chunks)} source chunks", len(chunks), chunk_number)
                 if notification is not None:
                     await notification
-        if not normalized:
+        if not normalized and not skipped_chunks:
+            if job_id:
+                with get_connection() as connection:
+                    prior = connection.execute("SELECT COUNT(*) FROM ingestion_candidates WHERE job_id = ? AND status = 'accepted'", (job_id,)).fetchone()[0]
+                if prior:
+                    return {"collection_id": collection_id, "source": source.name, "inserted": 0, "updated": 0, "questions": prior, "verification_status": "pending_review", "result_status": "succeeded"}
             raise IngestionError("No readable questions were found in this source.")
         if on_progress:
             notification = on_progress("saving", f"Saving {len(normalized)} classified questions", len(chunks), len(chunks))
             if notification is not None:
                 await notification
-        inserted, updated = upsert_questions(normalized)
         return {
             "collection_id": collection_id,
             "source": source.name,
-            "inserted": inserted,
-            "updated": updated,
+            "inserted": inserted_total,
+            "updated": updated_total,
             "questions": len(normalized),
             "verification_status": "pending_review",
+            "review_questions": review_questions,
+            "skipped_chunks": skipped_chunks,
+            "result_status": "partial" if skipped_chunks or review_questions else "succeeded",
+            "message": "Partial ingestion complete; review the report." if skipped_chunks or review_questions else "Ingestion complete",
         }
