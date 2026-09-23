@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -160,6 +161,7 @@ class GeneratedQuestion(BaseModel):
     difficulty: int = Field(ge=1, le=5)
     estimated_time_minutes: int = Field(ge=1, le=60)
     marks: int = Field(ge=1, le=100)
+    machine_check: "MachineCheckSpec | None" = None
 
     @model_validator(mode="after")
     def question_shape_matches_type(self) -> "GeneratedQuestion":
@@ -168,6 +170,44 @@ class GeneratedQuestion(BaseModel):
         if self.question_type == QuestionType.SINGLE_CORRECT and len(self.options) != 4:
             raise ValueError("single-correct MCQs require exactly four options")
         return self
+
+
+class PolynomialTerm(BaseModel):
+    coefficient: str
+    power: int = Field(ge=0, le=12)
+
+
+class MachineCheckSpec(BaseModel):
+    """Restricted, declarative data for questions the backend can verify exactly.
+
+    It intentionally describes only supported question families.  It is not a
+    general-purpose expression language and is never executed as model code.
+    """
+
+    family: Literal[
+        "quadratic_roots",
+        "polynomial_definite_integral",
+        "constant_acceleration_final_velocity",
+        "work_done_by_constant_force",
+    ]
+    coefficients: list[str] = Field(default_factory=list, max_length=3)
+    terms: list[PolynomialTerm] = Field(default_factory=list, max_length=20)
+    lower_bound: str | None = None
+    upper_bound: str | None = None
+    quantities: dict[str, float] = Field(default_factory=dict)
+    display_values: list[str] = Field(default_factory=list, max_length=20)
+    option_values: list[str] = Field(default_factory=list, max_length=4)
+    numeric_tolerance: float = Field(default=1e-6, gt=0, le=0.01)
+
+
+class SymbolicVerification(BaseModel):
+    status: Literal["verified", "fallback_required"]
+    family: str | None = None
+    engine: str = "sympy"
+    computed_answer: str | None = None
+    checks: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    audited: bool = False
 
 
 class GeneratedSolution(BaseModel):
@@ -205,6 +245,7 @@ class GeneratedSlotResult(BaseModel):
     selected_seed_question_id: str | None = None
     similarity_score: float
     validation: ValidationResult
+    symbolic_verification: SymbolicVerification | None = None
     generation_attempt: int
     reference_question_id: str | None = None
     reference_question_index: int | None = None

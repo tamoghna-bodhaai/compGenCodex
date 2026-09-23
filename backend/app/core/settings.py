@@ -46,6 +46,8 @@ class Settings:
     classification_use_vision: bool = False
     generation_fallback_model: str | None = None
     validation_fallback_model: str | None = None
+    symbolic_verification_enabled: bool = False
+    symbolic_verification_audit_rate: float = 0.10
 
     @property
     def generation_ready(self) -> bool:
@@ -69,4 +71,6 @@ def get_settings() -> Settings:
         generation_burst_concurrency=int(os.getenv("GENERATION_BURST_CONCURRENCY", "10")),
         validation_burst_concurrency=int(os.getenv("VALIDATION_BURST_CONCURRENCY", "10")),
         deterministic_validation_concurrency=int(os.getenv("DETERMINISTIC_VALIDATION_CONCURRENCY", "25")),
+        symbolic_verification_enabled=os.getenv("SYMBOLIC_VERIFICATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        symbolic_verification_audit_rate=float(os.getenv("SYMBOLIC_VERIFICATION_AUDIT_RATE", "0.10")),
     )

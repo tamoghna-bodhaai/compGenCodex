@@ -119,9 +119,13 @@ local structural checks, and independent model validation. The defaults allow 10
 candidate calls and 10 validation calls concurrently, while keeping the cheap
 local checks highly parallel. Tune `GENERATION_BURST_CONCURRENCY`,
 `VALIDATION_BURST_CONCURRENCY`, and `DETERMINISTIC_VALIDATION_CONCURRENCY` in
-`.env` to match your OpenRouter rate limits. Locally successful checks only
-reject malformed drafts; they do not replace the independent validator for
-mathematical correctness or wording ambiguity.
+`.env` to match your OpenRouter rate limits. Locally successful checks normally
+only reject malformed drafts. Optionally set `SYMBOLIC_VERIFICATION_ENABLED=true`
+to enable exact SymPy checks for supported structured Maths and formula-based
+Physics families. A verified question bypasses the validation model except for
+the deterministic audit sample configured by `SYMBOLIC_VERIFICATION_AUDIT_RATE`
+(default `0.10`); unsupported or inconsistent specifications retain the
+independent validator.
 
 Set `GENERATION_FALLBACK_MODEL` and/or `VALIDATION_FALLBACK_MODEL` to add a
 second generation phase for failed slots. Only after the primary pipeline has
@@ -172,7 +176,7 @@ PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s tests -v
 
 ## Generation endpoint
 
-`POST /api/generation/questions` accepts the PRD's paper configuration fields and returns only independently validated questions. It will return `503` until `OPENROUTER_API_KEY`, `GENERATION_MODEL`, and `VALIDATION_MODEL` are configured. This is intentional: no mock or unvalidated question is ever returned as generated output.
+`POST /api/generation/questions` accepts the PRD's paper configuration fields and returns questions accepted by the independent validator or the configured exact symbolic-verification lane. It will return `503` until `OPENROUTER_API_KEY`, `GENERATION_MODEL`, and `VALIDATION_MODEL` are configured. This is intentional: no mock or unvalidated question is ever returned as generated output.
 
 ## Paper builder endpoints
 

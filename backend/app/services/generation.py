@@ -5,9 +5,10 @@ import json
 import re
 import uuid
 import time
+import hashlib
 from datetime import UTC, datetime
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pydantic import ValidationError
 
@@ -24,10 +25,12 @@ from app.schemas.generation import (
     GenerationRequest,
     GenerationResponse,
     GenerationSlot,
+    SymbolicVerification,
     ValidationResult,
 )
 from app.services.openrouter import ModelConfigurationError, OpenRouterClient, OpenRouterError
 from app.services.retrieval import MetadataFirstRetriever, RetrievalCandidate
+from app.services.symbolic_verification import verify as verify_symbolically
 
 
 class GenerationFailure(RuntimeError):
@@ -47,6 +50,7 @@ class _Candidate:
     reference_question_index: int | None = None
     reference_question_number: int | None = None
     reference_reused: bool = False
+    symbolic_verification: SymbolicVerification | None = None
 
 
 def _deterministic_failure(question: GeneratedQuestion, slot: GenerationSlot) -> str | None:
@@ -133,8 +137,10 @@ class GenerationService:
                 candidates, failures = await self._generate_candidates(request, pending, attempt, before_slot, custom_instruction, generation_model)
                 candidates, local_failures = await self._deterministically_validate(request, candidates)
                 failures.update(local_failures)
+                locally_accepted, candidates = await self._accept_symbolically_verified(request, candidates)
                 validated, validation_failures = await self._llm_validate(request, candidates, validation_model)
                 failures.update(validation_failures)
+                validated.extend(locally_accepted)
 
                 for result in validated:
                     results.append(result)
@@ -200,8 +206,10 @@ class GenerationService:
                 )
                 candidates, local_failures = await self._deterministically_validate(request, candidates)
                 failures.update(local_failures)
+                locally_accepted, candidates = await self._accept_symbolically_verified(request, candidates)
                 validated, validation_failures = await self._llm_validate(request, candidates, validation_model)
                 failures.update(validation_failures)
+                validated.extend(locally_accepted)
 
                 for result in validated:
                     results.append(result)
@@ -379,9 +387,67 @@ class GenerationService:
                     await self._event(phase="deterministic_validation", outcome="rejected", slot=candidate.slot.slot, attempt=candidate.attempt, model=candidate.generation_model, failure=failure)
                     self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=failure, model=candidate.generation_model)
                     raise GenerationFailure(failure)
+                if self.settings.symbolic_verification_enabled:
+                    outcome = verify_symbolically(candidate.question)
+                    if outcome.verification.status == "verified":
+                        question = candidate.question.model_copy(update={"correct_answer": outcome.correct_answer})
+                        await self._event(
+                            phase="symbolic_validation", outcome="verified", slot=candidate.slot.slot,
+                            attempt=candidate.attempt, model="sympy", details={"family": outcome.verification.family},
+                        )
+                        return replace(candidate, question=question, symbolic_verification=outcome.verification)
+                    if candidate.question.machine_check is not None:
+                        await self._event(
+                            phase="symbolic_validation", outcome="fallback_required", slot=candidate.slot.slot,
+                            attempt=candidate.attempt, model="sympy", details={"reason": outcome.verification.reason},
+                        )
                 return candidate
 
         return await self._collect(candidates, check, key=lambda candidate: candidate.slot)
+
+    def _should_audit_symbolic(self, candidate: _Candidate) -> bool:
+        rate = min(1.0, max(0.0, self.settings.symbolic_verification_audit_rate))
+        if rate == 0:
+            return False
+        token = f"{candidate.slot.slot}:{candidate.attempt}:{candidate.question.stem}".encode()
+        return int.from_bytes(hashlib.sha256(token).digest()[:8], "big") / 2**64 < rate
+
+    async def _accept_symbolically_verified(
+        self, request: GenerationRequest, candidates: list[_Candidate]
+    ) -> tuple[list[GeneratedSlotResult], list[_Candidate]]:
+        """Accept local proofs, except for the deterministic audit subset."""
+        accepted: list[GeneratedSlotResult] = []
+        remaining: list[_Candidate] = []
+        for candidate in candidates:
+            verification = candidate.symbolic_verification
+            if verification is None or verification.status != "verified":
+                remaining.append(candidate)
+                continue
+            if self._should_audit_symbolic(candidate):
+                remaining.append(replace(candidate, symbolic_verification=verification.model_copy(update={"audited": True})))
+                await self._event(phase="symbolic_validation", outcome="audit_selected", slot=candidate.slot.slot,
+                                  attempt=candidate.attempt, model="sympy")
+                continue
+            validation = ValidationResult(
+                valid=True, independent_answer=verification.computed_answer,
+                matches_generated_answer=True, ambiguous=False, multiple_answers_possible=False,
+                sufficient_information=True, concept_match=True, difficulty_match=True,
+                comments="Accepted by deterministic symbolic verification.",
+            )
+            result = GeneratedSlotResult(
+                slot=candidate.slot, question=candidate.question, seed_question_ids=[seed.id for seed in candidate.seeds],
+                primary_seed_question_id=candidate.primary_seed_question_id,
+                selected_seed_question_id=candidate.slot.selected_seed_question_id,
+                similarity_score=candidate.similarity, validation=validation,
+                symbolic_verification=verification, generation_attempt=candidate.attempt,
+                reference_question_id=candidate.reference_question_id, reference_question_index=candidate.reference_question_index,
+                reference_question_number=candidate.reference_question_number, reference_reused=candidate.reference_reused,
+            )
+            self._log(request, result=result, status="symbolically_validated", model=candidate.generation_model)
+            await self._event(phase="symbolic_validation", outcome="accepted", slot=candidate.slot.slot,
+                              attempt=candidate.attempt, model="sympy")
+            accepted.append(result)
+        return accepted, remaining
 
     async def _llm_validate(
         self, request: GenerationRequest, candidates: list[_Candidate], validation_model: str
@@ -404,6 +470,7 @@ class GenerationService:
                     selected_seed_question_id=candidate.slot.selected_seed_question_id,
                     similarity_score=candidate.similarity,
                     validation=validation,
+                    symbolic_verification=candidate.symbolic_verification,
                     generation_attempt=candidate.attempt,
                     reference_question_id=candidate.reference_question_id,
                     reference_question_index=candidate.reference_question_index,
@@ -562,7 +629,10 @@ class GenerationService:
     ) -> None:
         if result:
             slot, seeds = result.slot, []
-            validation_json = result.validation.model_dump_json()
+            validation_json = json.dumps({
+                "llm_validation": result.validation.model_dump(),
+                "symbolic_verification": result.symbolic_verification.model_dump() if result.symbolic_verification else None,
+            })
             seed_ids = result.seed_question_ids
             similarity = result.similarity_score
         else:

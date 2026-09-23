@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT_DIR / "backend"))
 from app.core.settings import Settings
 from app.db.database import get_connection
 from app.schemas.generation import GeneratedQuestion, GeneratedSolution, GenerationRequest
+from app.services.symbolic_verification import verify as verify_symbolically
 from app.services.generation import GenerationService
 from app.services.openrouter import parse_model_json, repair_decoded_latex_escapes, strict_json_schema
 from app.services.seed_import import upsert_seed_questions
@@ -103,6 +104,46 @@ class GenerationServiceTests(unittest.TestCase):
         self.assertTrue(result.slots[0].validation.valid)
         self.assertEqual(len(client.calls), 2)
         self.assertFalse(any("assessment planner" in call for call in client.calls))
+
+    def test_symbolically_verified_quadratic_skips_llm_validation(self) -> None:
+        class SymbolicClient(FakeOpenRouterClient):
+            async def call_llm(self, *, system_prompt: str, **kwargs: object) -> dict:
+                if "independent JEE examination validator" in system_prompt:
+                    raise AssertionError("LLM validation should have been bypassed")
+                self.calls.append(system_prompt)
+                return {
+                    "question_type": "single_correct_mcq",
+                    "stem": "Solve $x^2-5x+6=0$.",
+                    "options": ["$\\{2, 3\\}$", "$\\{-2, -3\\}$", "$\\{2, -3\\}$", "$\\{-2, 3\\}$"],
+                    "correct_answer": "A", "solution": "Factor the quadratic.",
+                    "primary_concept": "quadratic equations", "secondary_concepts": [], "difficulty": 3,
+                    "estimated_time_minutes": 3, "marks": 3,
+                    "machine_check": {
+                        "family": "quadratic_roots", "coefficients": ["1", "-5", "6"],
+                        "display_values": ["-5", "6"],
+                        "option_values": ["{2, 3}", "{-2, -3}", "{2, -3}", "{-2, 3}"],
+                    },
+                }
+
+        settings = Settings("test", "generator", "validator", None, None, 3, 3, .90,
+                            symbolic_verification_enabled=True, symbolic_verification_audit_rate=0)
+        result = asyncio.run(GenerationService(settings=settings, client=SymbolicClient()).generate(request_for("structural_variation")))
+        self.assertEqual(len(result.slots[0].seed_question_ids) > 0, True)
+        self.assertEqual(result.slots[0].question.correct_answer, "A")
+        self.assertEqual(result.slots[0].symbolic_verification.status, "verified")
+
+    def test_invalid_symbolic_spec_falls_back_to_llm_validation(self) -> None:
+        question = GeneratedQuestion.model_validate({
+            "question_type": "single_correct_mcq", "stem": "Solve $x^2-5x+6=0$.",
+            "options": ["$\\{2, 3\\}$", "$\\{-2, -3\\}$", "$\\{2, -3\\}$", "$\\{-2, 3\\}$"],
+            "correct_answer": "A", "solution": "Factor the quadratic.", "primary_concept": "quadratic equations",
+            "secondary_concepts": [], "difficulty": 3, "estimated_time_minutes": 3, "marks": 3,
+            "machine_check": {"family": "quadratic_roots", "coefficients": ["1", "-5", "6"],
+                              "display_values": ["99"], "option_values": ["{2, 3}", "{-2, -3}", "{2, -3}", "{-2, 3}"]},
+        })
+        outcome = verify_symbolically(question)
+        self.assertEqual(outcome.verification.status, "fallback_required")
+        self.assertIn("displayed stem", outcome.verification.reason or "")
 
     def test_exhausted_primary_retries_use_generation_and_validation_fallbacks(self) -> None:
         class PrimaryValidatorRejects(FakeOpenRouterClient):

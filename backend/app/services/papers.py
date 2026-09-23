@@ -1049,6 +1049,7 @@ class PaperService:
             "similarity_score": result.similarity_score,
             "generation_attempt": result.generation_attempt,
             "validation": result.validation.model_dump(),
+            "symbolic_verification": result.symbolic_verification.model_dump() if result.symbolic_verification else None,
         }
         if result.reference_question_id is not None:
             metadata["reference_mapping"] = {
