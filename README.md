@@ -140,6 +140,10 @@ Set `OPENROUTER_API_KEY` plus either `CLASSIFICATION_MODEL` (recommended) or `GE
 
 PDF text is extracted with `pypdf` first and automatically retried with `PyMuPDF` (`fitz`) when the first pass returns sparse/no text — this fixes false `No selectable text / Use an OCR-enabled PDF` errors on clean digital PDFs that use CID fonts or XObjects. True scanned/image-only PDFs still return a clear diagnostic suggesting re-export or paste.
 
+## Diagram-aware questions
+
+Set `DIAGRAM_GENERATION_MODEL` to an OpenRouter image-capable model (for example, your selected Gemini Nano Banana model). `DIAGRAM_ANALYSIS_MODEL` defaults to `CLASSIFICATION_MODEL` and is used to locate PDF diagram crops and validate generated images; `DIAGRAM_MAX_ATTEMPTS` defaults to `2`. Source PDF diagrams are retained under `backend/data/media/diagrams` with structured metadata. If an image model is unavailable or rejects an output, the question remains available as text-only and records the diagram fallback state.
+
 ## Seed data
 
 `sample_data/jee_definite_integrals_questions.json` contains 50 single-correct MCQs. Every record has:

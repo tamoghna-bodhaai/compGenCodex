@@ -23,6 +23,7 @@ from app.db.database import get_connection
 from app.services.openrouter import ModelConfigurationError, OpenRouterClient, OpenRouterError
 from app.services.seed_import import upsert_questions
 from app.services.lifecycle import emit_event
+from app.services.diagrams import crop_normalized_page, store_diagram
 
 MAX_UPLOAD_BYTES = 35 * 1024 * 1024
 # A classified question includes substantial metadata, so a 28k-character
@@ -436,6 +437,16 @@ class QuestionIngestionService:
             source_text=source_text,
             use_vision=settings.classification_use_vision,
         )
+        is_pdf = Path(filename).suffix.lower() == ".pdf" or content_type == "application/pdf"
+        # Diagram extraction is deliberately PDF-only in v1. Rendered images
+        # are also supplied to the classifier so its normalized crop refers to
+        # the exact pixels retained below.
+        page_images: dict[int, str] = {}
+        if is_pdf and settings.diagram_analysis_model:
+            try:
+                page_images = dict(_render_pdf_pages_for_vision(content))
+            except Exception:
+                page_images = {}
         emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="extraction", outcome="completed", details={"vision": bool(source.vision_pages)})
         if source.vision_pages:
             # One page per request keeps question boundaries and page references
@@ -447,6 +458,11 @@ class QuestionIngestionService:
                     [image],
                 )
                 for page_number, image in source.vision_pages
+            ]
+        elif page_images:
+            chunks = [
+                (f"[Source page {page}]\n{text}", [page_images[page]] if page in page_images else None)
+                for page, text in source.pages
             ]
         else:
             chunks = [(chunk, None) for chunk in chunk_source(source)]
@@ -461,7 +477,9 @@ class QuestionIngestionService:
             notification = on_progress("classifying", f"Classifying 0 of {len(chunks)} source chunks", len(chunks), 0)
             if notification is not None:
                 await notification
-        primary_model = settings.classification_model or settings.generation_model
+        # A separately configured diagram analysis model receives page images;
+        # ordinary text ingestion continues using the classification model.
+        primary_model = (settings.diagram_analysis_model if page_images else None) or settings.classification_model or settings.generation_model
         fallback_model = settings.classification_fallback_model
         # Dedicated ingestion/classification models: primary is user-configurable
         # via CLASSIFICATION_MODEL (e.g. google/gemini-flash-3.5), fallback via
@@ -551,6 +569,7 @@ class QuestionIngestionService:
                     "answer_json": {"correct_answer": question.correct_answer} if question.correct_answer else None,
                     "source": source.name,
                     "verification_status": "pending_review",
+                    "_diagram_page": question.source_page,
                 })
                 for key in ("stem", "options", "correct_answer", "source_question_number", "source_page"):
                     record.pop(key, None)
@@ -562,6 +581,27 @@ class QuestionIngestionService:
                 inserted_chunk, updated_chunk = upsert_questions(chunk_normalized)
                 inserted_total += inserted_chunk
                 updated_total += updated_chunk
+                # Assets are saved only after the seed record is durable. A
+                # malformed crop is non-fatal: the text question remains usable.
+                for record in chunk_normalized:
+                    bbox = record.pop("diagram_bbox", None)
+                    required = record.pop("diagram_required", False)
+                    description = record.pop("diagram_description", None)
+                    render_spec = record.pop("diagram_render_spec", None)
+                    page = record.pop("_diagram_page", None)
+                    if not required or not bbox or not description or not page_images.get(page):
+                        continue
+                    with get_connection() as connection:
+                        stored = connection.execute("SELECT id FROM questions WHERE source_key = ?", (record["source_key"],)).fetchone()
+                    if not stored:
+                        continue
+                    try:
+                        cropped = crop_normalized_page(page_images[page], bbox)
+                        store_diagram(owner_column="seed_question_id", owner_id=stored["id"], provenance="source_crop", data=cropped,
+                                      description=description, render_spec=render_spec or description, source_page=page,
+                                      crop={"x": bbox[0], "y": bbox[1], "width": bbox[2], "height": bbox[3]})
+                    except (ValueError, OSError):
+                        pass
             if job_id:
                 with get_connection() as connection:
                     connection.execute("UPDATE ingestion_chunks SET state = 'succeeded', question_count = ?, updated_at = ? WHERE job_id = ? AND position = ?", (len(classified.questions), _now(), job_id, chunk_number))

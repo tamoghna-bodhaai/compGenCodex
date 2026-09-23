@@ -12,6 +12,7 @@ from app.schemas.generation import GeneratedSlotResult, GenerationRequest, Gener
 from app.schemas.papers import AddManualQuestionRequest, PaperCreateRequest, PaperQuestionInput, PaperUpdateRequest, QuestionEditRequest
 from app.services.generation import GenerationService
 from app.services.lifecycle import emit_event, events_for_job
+from app.services.diagrams import diagrams_for, generate_diagram, store_diagram
 
 
 class PaperNotFoundError(RuntimeError):
@@ -144,6 +145,8 @@ class PaperService:
                 (paper_id,),
             ).fetchall()]
         paper["sections"] = sections
+        for question in questions:
+            question["diagrams"] = diagrams_for(owner_column="paper_question_id", owner_id=question["id"])
         paper["questions"] = questions
         paper["question_count"] = len(questions)
         paper["requested_question_count"] = self._requested_total(paper["generation_config"])
@@ -419,7 +422,7 @@ class PaperService:
         else:
             generated = await (generation_service or GenerationService()).generate(request)
         for result in generated.slots:
-            self._store_generated_result(paper_id, result, section_id=section_ids.get(result.slot.section_title or ""))
+            await self._store_generated_result(paper_id, result, section_id=section_ids.get(result.slot.section_title or ""))
         self.update(paper_id, PaperUpdateRequest(status="generated"))
         return self.get(paper_id)
 
@@ -603,7 +606,7 @@ class PaperService:
                 # show a useful partial paper while the remaining slots run.
                 # Sectioned plans keep each subtopic's questions grouped under
                 # its own heading; position stays global so ordering is stable.
-                self._store_generated_result(
+                await self._store_generated_result(
                     paper_id, result, section_id=section_ids.get(result.slot.section_title or ""), position=result.slot.slot,
                 )
                 emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="persistence", outcome="accepted", slot=result.slot.slot, attempt=result.generation_attempt)
@@ -976,7 +979,7 @@ class PaperService:
                     slot,
                     custom_instruction=(custom_instruction or "").strip() or None,
                 )
-            self._store_generated_result(paper_id, result, replace_question_id=question_id, section_id=current["section_id"], position=current["position"])
+            await self._store_generated_result(paper_id, result, replace_question_id=question_id, section_id=current["section_id"], position=current["position"])
         return self.get(paper_id)
 
     async def regenerate_unlocked(self, paper_id: str, generation_service: GenerationService | None = None) -> dict:
@@ -1020,7 +1023,7 @@ class PaperService:
                 mapping[title] = section_id
         return mapping
 
-    def _store_generated_result(
+    async def _store_generated_result(
         self,
         paper_id: str,
         result: GeneratedSlotResult,
@@ -1058,20 +1061,37 @@ class PaperService:
                 "source_question_number": result.reference_question_number,
                 "reference_reused": result.reference_reused,
             }
+        question_id = replace_question_id
         with get_connection() as connection:
             if replace_question_id:
+                connection.execute("DELETE FROM question_diagrams WHERE paper_question_id = ?", (replace_question_id,))
                 connection.execute(
                     "UPDATE paper_questions SET question_json = ?, answer_json = ?, solution = ?, question_type = ?, difficulty = ?, generation_metadata = ?, updated_at = ? WHERE id = ?",
                     (json.dumps(question_json), json.dumps(answer_json), question.solution, question.question_type.value,
                      question.difficulty, json.dumps(metadata), now, replace_question_id),
                 )
-                return
-            stored_position = position or self._next_question_position(connection, paper_id, section_id)
-            connection.execute(
-                "INSERT INTO paper_questions (id, paper_id, section_id, position, question_json, answer_json, solution, question_type, difficulty, locked, generation_metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
-                (str(uuid.uuid4()), paper_id, section_id, stored_position, json.dumps(question_json), json.dumps(answer_json),
-                 question.solution, question.question_type.value, question.difficulty, json.dumps(metadata), now, now),
-            )
+                question_id = replace_question_id
+            else:
+                stored_position = position or self._next_question_position(connection, paper_id, section_id)
+                question_id = str(uuid.uuid4())
+                connection.execute(
+                    "INSERT INTO paper_questions (id, paper_id, section_id, position, question_json, answer_json, solution, question_type, difficulty, locked, generation_metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                    (question_id, paper_id, section_id, stored_position, json.dumps(question_json), json.dumps(answer_json),
+                     question.solution, question.question_type.value, question.difficulty, json.dumps(metadata), now, now),
+                )
+        if not question.diagram_required or not question_id:
+            return
+        seed_diagrams = diagrams_for(owner_column="seed_question_id", owner_id=result.primary_seed_question_id) if result.primary_seed_question_id else []
+        generated = await generate_diagram(question=question.model_dump(), render_spec=question.diagram_render_spec or "", source_diagram=seed_diagrams[0] if seed_diagrams else None)
+        if generated.get("status") == "accepted":
+            store_diagram(owner_column="paper_question_id", owner_id=question_id, provenance="generated", data=generated["data"],
+                          description=question.diagram_render_spec or "", render_spec=question.diagram_render_spec or "",
+                          generation_prompt=generated.get("prompt"), model=generated.get("model"), validation_status="accepted")
+        else:
+            store_diagram(owner_column="paper_question_id", owner_id=question_id, provenance="generated", data=None,
+                          description=question.diagram_render_spec or "", render_spec=question.diagram_render_spec or "",
+                          generation_prompt=generated.get("prompt"), model=generated.get("model"),
+                          validation_status=str(generated.get("status", "failed")), validation_notes=str(generated.get("notes", "")))
 
     @staticmethod
     def _store_solution_result(question: dict, result: Any) -> None:

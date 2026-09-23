@@ -29,6 +29,10 @@ class ClassifiedSeedQuestion(BaseModel):
     solution: str | None = None
     expected_time_minutes: int | None = Field(default=None, ge=1, le=60)
     marks: int | None = Field(default=None, ge=1, le=100)
+    diagram_required: bool = False
+    diagram_bbox: list[float] | None = None
+    diagram_description: str | None = None
+    diagram_render_spec: str | None = None
 
     @model_validator(mode="after")
     def validate_shape(self) -> "ClassifiedSeedQuestion":
@@ -40,6 +44,10 @@ class ClassifiedSeedQuestion(BaseModel):
             raise ValueError("multiple-correct MCQs require at least two options")
         if self.question_type in {QuestionType.NUMERICAL, QuestionType.SUBJECTIVE} and self.options:
             raise ValueError("numerical and subjective questions cannot include options")
+        if self.diagram_bbox is not None and (len(self.diagram_bbox) != 4 or any(value < 0 or value > 1 for value in self.diagram_bbox)):
+            raise ValueError("diagram_bbox must contain normalized x, y, width, height values between 0 and 1")
+        if self.diagram_required and (not self.diagram_bbox or not self.diagram_description):
+            raise ValueError("diagram questions require a bounding box and description")
         return self
 
 

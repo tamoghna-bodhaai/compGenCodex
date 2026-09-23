@@ -105,6 +105,7 @@
 .ingestionMeta strong { flex: 0 0 auto; color: var(--success); font-size: 10px; font-weight: 700; }
 .ingestionError { display: grid; gap: 3px; margin-top: 11px; border: 1px solid #f0c7c3; border-radius: 8px; background: var(--danger-soft); color: var(--danger); padding: 8px 10px; font-size: 11px; line-height: 1.4; }
 .ingestionError strong { font-size: 10px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
+.questionDiagram { display: block; width: min(100%, 420px); max-height: 280px; margin: 10px auto; object-fit: contain; border: 1px solid #dedbdd; border-radius: 6px; background: #fff; }
 .errorText { color: var(--danger) !important; }
 .libraryPanel { margin-top: 22px; overflow: hidden; }
 .libraryHeadActions { display: flex; min-width: 0; align-items: center; gap: 10px; }

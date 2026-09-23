@@ -31,6 +31,7 @@ from app.schemas.generation import (
 from app.services.openrouter import ModelConfigurationError, OpenRouterClient, OpenRouterError
 from app.services.retrieval import MetadataFirstRetriever, RetrievalCandidate
 from app.services.symbolic_verification import verify as verify_symbolically
+from app.services.diagrams import diagrams_for
 
 
 class GenerationFailure(RuntimeError):
@@ -587,6 +588,13 @@ class GenerationService:
                 cost_context=self._cost_context("generation", slot),
             )
         question = GeneratedQuestion.model_validate(raw)
+        # A visual seed is an explicit instruction to preserve the diagram's
+        # reasoning in structural variations, even if the text model omitted
+        # its self-reported flag.
+        primary_id = primary_seed_question_id or (seeds[0].id if seeds else None)
+        source_diagrams = diagrams_for(owner_column="seed_question_id", owner_id=primary_id) if primary_id else []
+        if source_diagrams and not question.diagram_required:
+            question = question.model_copy(update={"diagram_required": True, "diagram_render_spec": source_diagrams[0]["render_spec"]})
         if question.question_type != slot.question_type or question.difficulty != slot.difficulty:
             raise GenerationFailure("Generated question did not match the requested type or difficulty.")
         return question

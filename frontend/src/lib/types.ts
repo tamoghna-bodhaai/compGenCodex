@@ -45,6 +45,16 @@ export interface QuestionJson {
   estimated_time_minutes?: number | null;
 }
 
+export interface QuestionDiagram {
+  id: string;
+  url?: string | null;
+  description: string;
+  render_spec: string;
+  provenance: "source_crop" | "generated";
+  validation_status: string;
+  validation_notes?: string;
+}
+
 export interface PaperQuestion {
   id: string;
   paper_id: string;
@@ -58,6 +68,7 @@ export interface PaperQuestion {
   locked: boolean;
   generation_metadata?: Record<string, unknown> | null;
   updated_at?: string;
+  diagrams?: QuestionDiagram[];
 }
 
 export interface PaperSection {
@@ -184,6 +195,7 @@ export interface SeedQuestion {
   verification_status: string;
   question_json: QuestionJson;
   answer_json?: { correct_answer?: string | null } | null;
+  diagrams?: QuestionDiagram[];
 }
 
 export interface SeedComparison {

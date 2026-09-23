@@ -13,6 +13,7 @@ from app.core.auth import (
 from app.api.generation import router as generation_router
 from app.api.papers import router as papers_router
 from app.api.questions import router as questions_router
+from app.api.diagrams import router as diagrams_router
 from app.db.database import initialize_database
 from app.services.ingestion import QuestionIngestionService
 from app.services.papers import PaperService
@@ -25,6 +26,7 @@ app = FastAPI(
 )
 app.include_router(auth_router)
 app.include_router(questions_router)
+app.include_router(diagrams_router)
 app.include_router(generation_router)
 app.include_router(papers_router)
 app.include_router(branding_router)

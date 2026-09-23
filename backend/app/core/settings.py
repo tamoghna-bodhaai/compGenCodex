@@ -48,6 +48,9 @@ class Settings:
     validation_fallback_model: str | None = None
     symbolic_verification_enabled: bool = False
     symbolic_verification_audit_rate: float = 0.10
+    diagram_generation_model: str | None = None
+    diagram_analysis_model: str | None = None
+    diagram_max_attempts: int = 2
 
     @property
     def generation_ready(self) -> bool:
@@ -73,4 +76,7 @@ def get_settings() -> Settings:
         deterministic_validation_concurrency=int(os.getenv("DETERMINISTIC_VALIDATION_CONCURRENCY", "25")),
         symbolic_verification_enabled=os.getenv("SYMBOLIC_VERIFICATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
         symbolic_verification_audit_rate=float(os.getenv("SYMBOLIC_VERIFICATION_AUDIT_RATE", "0.10")),
+        diagram_generation_model=os.getenv("DIAGRAM_GENERATION_MODEL") or None,
+        diagram_analysis_model=os.getenv("DIAGRAM_ANALYSIS_MODEL") or os.getenv("CLASSIFICATION_MODEL") or None,
+        diagram_max_attempts=max(1, int(os.getenv("DIAGRAM_MAX_ATTEMPTS", "2"))),
     )

@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS questions (
 CREATE INDEX IF NOT EXISTS questions_retrieval_metadata_idx
   ON questions (exam, subject, chapter, topic, question_type, difficulty);
 
+
 CREATE TABLE IF NOT EXISTS papers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID,
@@ -70,6 +71,18 @@ CREATE TABLE IF NOT EXISTS paper_questions (
   generation_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS question_diagrams (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  seed_question_id UUID REFERENCES questions(id) ON DELETE CASCADE,
+  paper_question_id UUID REFERENCES paper_questions(id) ON DELETE CASCADE,
+  storage_path TEXT, mime_type TEXT, width INTEGER, height INTEGER, sha256 TEXT,
+  provenance TEXT NOT NULL CHECK (provenance IN ('source_crop', 'generated')),
+  source_page INTEGER, crop_json JSONB, description TEXT NOT NULL DEFAULT '', render_spec TEXT NOT NULL DEFAULT '',
+  generation_prompt TEXT, model TEXT, validation_status TEXT NOT NULL DEFAULT 'pending', validation_notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((seed_question_id IS NOT NULL) <> (paper_question_id IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS generation_logs (

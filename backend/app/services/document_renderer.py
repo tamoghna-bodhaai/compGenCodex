@@ -19,6 +19,7 @@ from docx.shared import Inches, Mm, Pt, RGBColor
 from lxml import etree
 
 from app.schemas.papers import ExportFormat, ExportVariant
+from app.services.diagrams import asset_path
 
 
 class DocumentRenderError(RuntimeError):
@@ -938,6 +939,12 @@ class PaperDocumentRenderer:
                     has_content = True
                 if payload.get("marks"):
                     doc.paragraphs[-1].add_run(f"  [{payload['marks']} marks]").italic = True
+                for diagram in question.get("diagrams") or []:
+                    path = asset_path(diagram)
+                    if path:
+                        image_line = doc.add_paragraph()
+                        image_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        image_line.add_run().add_picture(str(path), width=Inches(4.8))
                 self._add_options_table(doc, options)
                 number += 1
 
@@ -1239,6 +1246,10 @@ class PaperDocumentRenderer:
                 marks_q = payload.get("marks")
                 marks_suffix = f" \\hfill [{self._latex_escape(marks_q)} marks]" if marks_q else ""
                 lines.append(rf"\item {stem}{marks_suffix}")
+                for diagram in question.get("diagrams") or []:
+                    path = asset_path(diagram)
+                    if path:
+                        lines.append(rf"\begin{{center}}\includegraphics[width=.72\linewidth]{{{self._latex_escape(str(path))}}}\end{{center}}")
                 options = list(payload.get("options") or [])
                 if options:
                     lines.append(self._latex_options(options))

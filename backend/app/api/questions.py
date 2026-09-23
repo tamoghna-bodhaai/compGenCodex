@@ -6,6 +6,7 @@ from app.db.database import decode_question_row, get_connection
 from app.services.ingestion import IngestionError, MAX_UPLOAD_BYTES, QuestionIngestionService
 from app.services.openrouter import ModelConfigurationError, OpenRouterError
 from app.services.costs import cost_summary
+from app.services.diagrams import diagrams_for
 
 router = APIRouter(prefix="/api/questions", tags=["questions"])
 
@@ -150,7 +151,10 @@ def list_questions(
         rows = connection.execute(
             f"SELECT * FROM questions {where} ORDER BY source_key LIMIT ? OFFSET ?", [*parameters, limit, offset]
         ).fetchall()
-    return {"items": [decode_question_row(row) for row in rows], "count": len(rows), "total": total, "offset": offset}
+    items = [decode_question_row(row) for row in rows]
+    for item in items:
+        item["diagrams"] = diagrams_for(owner_column="seed_question_id", owner_id=item["id"])
+    return {"items": items, "count": len(items), "total": total, "offset": offset}
 
 
 @router.get("/catalog")
@@ -174,4 +178,6 @@ def get_question(question_id: str) -> dict:
         row = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Question not found")
-    return decode_question_row(row)
+    item = decode_question_row(row)
+    item["diagrams"] = diagrams_for(owner_column="seed_question_id", owner_id=item["id"])
+    return item

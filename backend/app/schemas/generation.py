@@ -162,6 +162,8 @@ class GeneratedQuestion(BaseModel):
     estimated_time_minutes: int = Field(ge=1, le=60)
     marks: int = Field(ge=1, le=100)
     machine_check: "MachineCheckSpec | None" = None
+    diagram_required: bool = False
+    diagram_render_spec: str | None = None
 
     @model_validator(mode="after")
     def question_shape_matches_type(self) -> "GeneratedQuestion":
@@ -169,6 +171,8 @@ class GeneratedQuestion(BaseModel):
             raise ValueError("MCQ questions require options")
         if self.question_type == QuestionType.SINGLE_CORRECT and len(self.options) != 4:
             raise ValueError("single-correct MCQs require exactly four options")
+        if self.diagram_required and not (self.diagram_render_spec or "").strip():
+            raise ValueError("diagram questions require a render specification")
         return self
 
 

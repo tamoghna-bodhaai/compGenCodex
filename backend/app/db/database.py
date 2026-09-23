@@ -38,6 +38,30 @@ CREATE TABLE IF NOT EXISTS questions (
 );
 CREATE INDEX IF NOT EXISTS questions_retrieval_metadata_idx
     ON questions (exam, subject, chapter, topic, question_type, difficulty);
+CREATE TABLE IF NOT EXISTS question_diagrams (
+    id TEXT PRIMARY KEY,
+    seed_question_id TEXT REFERENCES questions(id) ON DELETE CASCADE,
+    paper_question_id TEXT REFERENCES paper_questions(id) ON DELETE CASCADE,
+    storage_path TEXT,
+    mime_type TEXT,
+    width INTEGER,
+    height INTEGER,
+    sha256 TEXT,
+    provenance TEXT NOT NULL CHECK (provenance IN ('source_crop', 'generated')),
+    source_page INTEGER,
+    crop_json TEXT,
+    description TEXT NOT NULL DEFAULT '',
+    render_spec TEXT NOT NULL DEFAULT '',
+    generation_prompt TEXT,
+    model TEXT,
+    validation_status TEXT NOT NULL DEFAULT 'pending',
+    validation_notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((seed_question_id IS NOT NULL) != (paper_question_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS question_diagrams_seed_idx ON question_diagrams(seed_question_id);
+CREATE INDEX IF NOT EXISTS question_diagrams_paper_idx ON question_diagrams(paper_question_id);
 CREATE TABLE IF NOT EXISTS generation_logs (
     id TEXT PRIMARY KEY,
     request_json TEXT NOT NULL,

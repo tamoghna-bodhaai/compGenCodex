@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from app.db.database import decode_question_row, get_connection
+from app.services.diagrams import diagrams_for
 from app.schemas.generation import GenerationRequest, GenerationSlot
 
 
@@ -22,6 +23,8 @@ class RetrievalCandidate:
     score: float
 
     def prompt_payload(self) -> dict:
+        diagrams = diagrams_for(owner_column="seed_question_id", owner_id=self.id)
+        diagram = diagrams[0] if diagrams else None
         return {
             "source_key": self.source_key,
             "primary_concept": self.primary_concept,
@@ -29,6 +32,7 @@ class RetrievalCandidate:
             "difficulty": self.difficulty,
             "stem": self.question_json["stem"],
             "options": self.question_json.get("options", []),
+            "diagram": ({"description": diagram["description"], "render_spec": diagram["render_spec"], "diagram_id": diagram["id"]} if diagram else None),
         }
 
 

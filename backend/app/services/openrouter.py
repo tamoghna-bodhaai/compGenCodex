@@ -193,6 +193,42 @@ class OpenRouterClient:
             raise OpenRouterError("OpenRouter returned a non-text structured response.")
         return parse_model_json(content)
 
+    async def call_image(self, *, model: str | None, prompt: str, images: list[str] | None = None) -> str:
+        """Call OpenRouter image-capable models and normalize common image responses.
+
+        Providers differ: some return an ``images`` array, others return an
+        image content part. Keeping that variation out of question services
+        makes the selected model entirely configuration-driven.
+        """
+        if not self.settings.openrouter_api_key or not model:
+            raise ModelConfigurationError("Diagram generation is not configured. Set OPENROUTER_API_KEY and DIAGRAM_GENERATION_MODEL.")
+        content: Any = [{"type": "text", "text": prompt}]
+        for image in images or []:
+            content.append({"type": "image_url", "image_url": {"url": image}})
+        payload = {"model": model, "messages": [{"role": "user", "content": content}], "modalities": ["image", "text"], "max_tokens": 800}
+        response = await asyncio.to_thread(self._post, payload)
+        record_llm_cost(context={"operation": "diagram_generation", "phase": "image"}, response=response, requested_model=model)
+        candidates: list[Any] = []
+        candidates.extend(response.get("images") or [])
+        try:
+            message = response["choices"][0]["message"]
+            candidates.extend(message.get("images") or [])
+            if isinstance(message.get("content"), list):
+                candidates.extend(message["content"])
+        except (KeyError, IndexError, TypeError):
+            pass
+        for item in candidates:
+            if isinstance(item, str) and item.startswith("data:image/"):
+                return item
+            if isinstance(item, dict):
+                url = item.get("image_url", {}).get("url") if isinstance(item.get("image_url"), dict) else item.get("url")
+                if isinstance(url, str) and url.startswith("data:image/"):
+                    return url
+                b64 = item.get("b64_json") or item.get("data")
+                if isinstance(b64, str):
+                    return f"data:image/png;base64,{b64}"
+        raise OpenRouterError("The selected diagram model did not return an image asset.")
+
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = Request(
             OPENROUTER_CHAT_URL,
