@@ -250,6 +250,11 @@ def chunk_source(source: ExtractedSource) -> list[str]:
 
 class QuestionIngestionService:
     _tasks: dict[str, asyncio.Task[None]] = {}
+    # PDF parsing, OCR, and page rasterization are CPU/memory-heavy.  Keep
+    # them out of the API event loop so health checks and ordinary requests
+    # remain responsive, and only prepare one uploaded document at a time on
+    # the small single-replica deployment.
+    _source_preparation = asyncio.Semaphore(1)
 
     @classmethod
     def enqueue(cls, job_id: str) -> None:
@@ -430,23 +435,27 @@ class QuestionIngestionService:
         job_id: str | None = None,
     ) -> dict:
         settings = get_settings()
-        source = extract_source(
-            filename=filename,
-            content_type=content_type,
-            content=content,
-            source_text=source_text,
-            use_vision=settings.classification_use_vision,
-        )
         is_pdf = Path(filename).suffix.lower() == ".pdf" or content_type == "application/pdf"
-        # Diagram extraction is deliberately PDF-only in v1. Rendered images
-        # are also supplied to the classifier so its normalized crop refers to
-        # the exact pixels retained below.
-        page_images: dict[int, str] = {}
-        if is_pdf and settings.diagram_analysis_model:
-            try:
-                page_images = dict(_render_pdf_pages_for_vision(content))
-            except Exception:
-                page_images = {}
+        async with self._source_preparation:
+            source = await asyncio.to_thread(
+                extract_source,
+                filename=filename,
+                content_type=content_type,
+                content=content,
+                source_text=source_text,
+                use_vision=settings.classification_use_vision,
+            )
+            # Diagram extraction is deliberately PDF-only in v1. Rendered
+            # images are also supplied to the classifier so its normalized
+            # crop refers to the exact pixels retained below.  This too must
+            # not run on the event loop: PyMuPDF rasterization can be slow for
+            # a multi-page source document.
+            page_images: dict[int, str] = {}
+            if is_pdf and settings.diagram_analysis_model:
+                try:
+                    page_images = dict(await asyncio.to_thread(_render_pdf_pages_for_vision, content))
+                except Exception:
+                    page_images = {}
         emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="extraction", outcome="completed", details={"vision": bool(source.vision_pages)})
         if source.vision_pages:
             # One page per request keeps question boundaries and page references
