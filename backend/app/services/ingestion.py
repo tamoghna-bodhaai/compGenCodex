@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import io
 import base64
 import json
 import re
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,10 +34,24 @@ MAX_CHUNK_CHARACTERS = 7_000
 OCR_RENDER_DPI = 300
 OCR_TIMEOUT_SECONDS = 30
 VISION_RENDER_DPI = 120
+_SOURCE_PREPARATION_LOCK = threading.BoundedSemaphore(1)
+_CANCELLATION_SIGNAL: contextvars.ContextVar[threading.Event | None] = contextvars.ContextVar(
+    "ingestion_cancellation_signal", default=None
+)
 
 
 class IngestionError(RuntimeError):
     """Raised for source extraction or classification errors safe to show to teachers."""
+
+
+class IngestionCancelled(RuntimeError):
+    """Stops local document processing after an ingestion job is cancelled."""
+
+
+def _raise_if_cancelled() -> None:
+    signal = _CANCELLATION_SIGNAL.get()
+    if signal is not None and signal.is_set():
+        raise IngestionCancelled("Ingestion was cancelled.")
 
 
 def _now() -> str:
@@ -53,7 +69,11 @@ def _extract_pdf_with_pypdf(content: bytes) -> list[tuple[int | None, str]]:
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(content))
-    return [(number, (page.extract_text() or "").strip()) for number, page in enumerate(reader.pages, 1)]
+    pages = []
+    for number, page in enumerate(reader.pages, 1):
+        _raise_if_cancelled()
+        pages.append((number, (page.extract_text() or "").strip()))
+    return pages
 
 
 def _extract_pdf_with_pymupdf(content: bytes) -> list[tuple[int | None, str]]:
@@ -61,7 +81,11 @@ def _extract_pdf_with_pymupdf(content: bytes) -> list[tuple[int | None, str]]:
 
     doc = fitz.open(stream=content, filetype="pdf")
     try:
-        return [(number, (page.get_text() or "").strip()) for number, page in enumerate(doc, 1)]
+        pages = []
+        for number, page in enumerate(doc, 1):
+            _raise_if_cancelled()
+            pages.append((number, (page.get_text() or "").strip()))
+        return pages
     finally:
         doc.close()
 
@@ -73,10 +97,11 @@ def _render_pdf_pages_for_vision(content: bytes) -> list[tuple[int, str]]:
     scale = VISION_RENDER_DPI / 72
     document = fitz.open(stream=content, filetype="pdf")
     try:
-        return [
-            (number, base64.b64encode(page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes("png")).decode("ascii"))
-            for number, page in enumerate(document, 1)
-        ]
+        pages = []
+        for number, page in enumerate(document, 1):
+            _raise_if_cancelled()
+            pages.append((number, base64.b64encode(page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes("png")).decode("ascii")))
+        return pages
     finally:
         document.close()
 
@@ -97,6 +122,7 @@ def _extract_pdf_with_ocr(content: bytes) -> list[tuple[int | None, str]]:
     try:
         pages: list[tuple[int | None, str]] = []
         for number, page in enumerate(document, 1):
+            _raise_if_cancelled()
             pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             with Image.open(io.BytesIO(pixmap.tobytes("png"))) as image:
                 text = pytesseract.image_to_string(
@@ -105,6 +131,7 @@ def _extract_pdf_with_ocr(content: bytes) -> list[tuple[int | None, str]]:
                     config="--oem 1 --psm 6",
                     timeout=OCR_TIMEOUT_SECONDS,
                 ).strip()
+            _raise_if_cancelled()
             pages.append((number, text))
         return pages
     finally:
@@ -123,6 +150,8 @@ def _best_pdf_pages(content: bytes, *, include_ocr: bool = True) -> list[tuple[i
     pypdf_error: Exception | None = None
     try:
         pypdf_pages = _extract_pdf_with_pypdf(content)
+    except IngestionCancelled:
+        raise
     except Exception as error:  # noqa: BLE001 - pypdf exposes multiple types
         pypdf_error = error
         pypdf_pages = []
@@ -146,6 +175,8 @@ def _best_pdf_pages(content: bytes, *, include_ocr: bool = True) -> list[tuple[i
     if should_try_mupdf:
         try:
             mupdf_pages = _extract_pdf_with_pymupdf(content)
+        except IngestionCancelled:
+            raise
         except ImportError:
             if pypdf_error is not None:
                 raise pypdf_error
@@ -175,6 +206,8 @@ def _best_pdf_pages(content: bytes, *, include_ocr: bool = True) -> list[tuple[i
     # makes otherwise unreadable question sets available for teacher review.
     try:
         ocr_pages = _extract_pdf_with_ocr(content)
+    except IngestionCancelled:
+        raise
     except Exception:  # OCR must not prevent the standard extraction failure message.
         return selected_pages
     return ocr_pages if any(text for _, text in ocr_pages) else selected_pages
@@ -185,6 +218,7 @@ def extract_source(
 ) -> ExtractedSource:
     if source_text.strip():
         return ExtractedSource(filename or "pasted-question.txt", [(None, source_text.strip())])
+    _raise_if_cancelled()
     if not content:
         raise IngestionError("Paste question text or upload a PDF or DOCX file.")
     if len(content) > MAX_UPLOAD_BYTES:
@@ -198,9 +232,15 @@ def extract_source(
     elif suffix == ".docx" or content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         try:
             document = Document(io.BytesIO(content))
-            parts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+            parts = []
+            for paragraph in document.paragraphs:
+                _raise_if_cancelled()
+                if paragraph.text.strip():
+                    parts.append(paragraph.text.strip())
             for table in document.tables:
-                parts.extend(cell.text.strip() for row in table.rows for cell in row.cells if cell.text.strip())
+                for row in table.rows:
+                    _raise_if_cancelled()
+                    parts.extend(cell.text.strip() for cell in row.cells if cell.text.strip())
             pages = [(None, "\n".join(parts))]
         except Exception as error:
             raise IngestionError("This DOCX could not be read. Paste its question text instead.") from error
@@ -221,6 +261,32 @@ def extract_source(
             "(Tried pypdf, PyMuPDF, and local OCR.)"
         )
     return ExtractedSource(filename or "uploaded-source", pages)
+
+
+def _prepare_source_for_ingestion(
+    *, filename: str, content_type: str | None, content: bytes, source_text: str,
+    use_vision: bool, include_diagram_pages: bool,
+) -> tuple[ExtractedSource, dict[int, str]]:
+    """Run all blocking document work under one process-wide preparation slot."""
+    with _SOURCE_PREPARATION_LOCK:
+        _raise_if_cancelled()
+        source = extract_source(
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            source_text=source_text,
+            use_vision=use_vision,
+        )
+        is_pdf = Path(filename).suffix.lower() == ".pdf" or content_type == "application/pdf"
+        page_images: dict[int, str] = {}
+        if is_pdf and include_diagram_pages:
+            try:
+                page_images = dict(_render_pdf_pages_for_vision(content))
+            except IngestionCancelled:
+                raise
+            except Exception:
+                page_images = {}
+        return source, page_images
 
 
 def chunk_source(source: ExtractedSource) -> list[str]:
@@ -250,17 +316,37 @@ def chunk_source(source: ExtractedSource) -> list[str]:
 
 class QuestionIngestionService:
     _tasks: dict[str, asyncio.Task[None]] = {}
-    # PDF parsing, OCR, and page rasterization are CPU/memory-heavy.  Keep
-    # them out of the API event loop so health checks and ordinary requests
-    # remain responsive, and only prepare one uploaded document at a time on
-    # the small single-replica deployment.
-    _source_preparation = asyncio.Semaphore(1)
+    _cancellation_signals: dict[str, threading.Event] = {}
 
     @classmethod
     def enqueue(cls, job_id: str) -> None:
         task = cls._tasks.get(job_id)
         if task is None or task.done():
-            cls._tasks[job_id] = asyncio.create_task(cls().run_job(job_id), name=f"ingestion-{job_id}")
+            signal = cls._cancellation_signals.setdefault(job_id, threading.Event())
+            signal.clear()
+            task = asyncio.create_task(cls().run_job(job_id, cancellation_signal=signal), name=f"ingestion-{job_id}")
+            cls._tasks[job_id] = task
+
+            def clear_completed_task(completed_task: asyncio.Task[None]) -> None:
+                if cls._tasks.get(job_id) is completed_task:
+                    cls._tasks.pop(job_id, None)
+
+            task.add_done_callback(clear_completed_task)
+
+    @classmethod
+    async def enqueue_after_response(cls, job_id: str) -> None:
+        """Create a tracked worker task from Starlette's async background hook."""
+        cls.enqueue(job_id)
+
+    @classmethod
+    def _stop_task(cls, job_id: str) -> None:
+        """Signal blocking document work and cancel the coroutine at its next await."""
+        signal = cls._cancellation_signals.get(job_id)
+        if signal is not None:
+            signal.set()
+        task = cls._tasks.get(job_id)
+        if task is not None and not task.done():
+            task.get_loop().call_soon_threadsafe(task.cancel)
 
     @classmethod
     def enqueue_recoverable_jobs(cls) -> None:
@@ -350,6 +436,8 @@ class QuestionIngestionService:
         if job["state"] not in {"queued", "running"}:
             raise IngestionError("Only active ingestion jobs can be cancelled.")
         self._update_job(job_id, state="failed", phase="cancelled", control_state="cancelled", result_status="cancelled", message="Cancelled; accepted questions and report are retained.", finished=True)
+        self._stop_task(job_id)
+        emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="job", outcome="cancelled")
         return self.get_job(job_id)
 
     def report(self, job_id: str) -> dict:
@@ -379,7 +467,8 @@ class QuestionIngestionService:
             connection.execute(f"UPDATE ingestion_jobs SET {assignments} WHERE id = ?", [*updates.values(), job_id])
 
     async def run_job(self, job_id: str, *, filename: str | None = None, content_type: str | None = None,
-                      content: bytes | None = None, source_text: str | None = None, conversion_note: str | None = None) -> None:
+                      content: bytes | None = None, source_text: str | None = None, conversion_note: str | None = None,
+                      cancellation_signal: threading.Event | None = None) -> None:
         with get_connection() as connection:
             row = connection.execute("SELECT * FROM ingestion_jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
@@ -400,7 +489,8 @@ class QuestionIngestionService:
 
         try:
             result = await self.ingest(filename=filename, content_type=content_type, content=content, source_text=source_text,
-                                       conversion_note=conversion_note, on_progress=progress, job_id=job_id)
+                                       conversion_note=conversion_note, on_progress=progress, job_id=job_id,
+                                       cancellation_signal=cancellation_signal)
             if self.get_job(job_id).get("control_state") != "active":
                 return
             with get_connection() as connection:
@@ -410,6 +500,10 @@ class QuestionIngestionService:
             result_status = "partial" if skipped or review else result.get("result_status", "succeeded")
             self._update_job(job_id, state="succeeded", phase="complete", result_status=result_status, message=("Partial ingestion complete; review the report." if result_status == "partial" else "Ingestion complete"), ingested_questions=accepted, accepted_questions=accepted, review_questions=review, skipped_chunks=skipped, retryable_chunks=skipped, finished=True)
             emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="job", outcome="succeeded")
+        except asyncio.CancelledError:
+            # cancel_job/pause_job has already persisted the requested state.
+            # Re-raise so the tracked task finishes immediately.
+            raise
         except Exception as error:  # Background work must surface a user-safe failure state.
             if self.get_job(job_id).get("control_state") == "cancelled":
                 return
@@ -433,29 +527,22 @@ class QuestionIngestionService:
         conversion_note: str,
         on_progress: Callable[[str, str, int | None, int | None], Awaitable[None] | None] | None = None,
         job_id: str | None = None,
+        cancellation_signal: threading.Event | None = None,
     ) -> dict:
         settings = get_settings()
-        is_pdf = Path(filename).suffix.lower() == ".pdf" or content_type == "application/pdf"
-        async with self._source_preparation:
-            source = await asyncio.to_thread(
-                extract_source,
+        token = _CANCELLATION_SIGNAL.set(cancellation_signal)
+        try:
+            source, page_images = await asyncio.to_thread(
+                _prepare_source_for_ingestion,
                 filename=filename,
                 content_type=content_type,
                 content=content,
                 source_text=source_text,
                 use_vision=settings.classification_use_vision,
+                include_diagram_pages=bool(settings.diagram_analysis_model),
             )
-            # Diagram extraction is deliberately PDF-only in v1. Rendered
-            # images are also supplied to the classifier so its normalized
-            # crop refers to the exact pixels retained below.  This too must
-            # not run on the event loop: PyMuPDF rasterization can be slow for
-            # a multi-page source document.
-            page_images: dict[int, str] = {}
-            if is_pdf and settings.diagram_analysis_model:
-                try:
-                    page_images = dict(await asyncio.to_thread(_render_pdf_pages_for_vision, content))
-                except Exception:
-                    page_images = {}
+        finally:
+            _CANCELLATION_SIGNAL.reset(token)
         emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="extraction", outcome="completed", details={"vision": bool(source.vision_pages)})
         if source.vision_pages:
             # One page per request keeps question boundaries and page references

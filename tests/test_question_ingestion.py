@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
@@ -102,6 +103,27 @@ class QuestionIngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["total_chunks"], 1)
         self.assertEqual(completed["completed_chunks"], 1)
         self.assertEqual(completed["ingested_questions"], 1)
+
+    async def test_cancelling_an_active_job_stops_its_tracked_worker(self) -> None:
+        service = QuestionIngestionService()
+        job = service.create_job("long-running.pdf", content=b"pdf", content_type="application/pdf")
+        started = asyncio.Event()
+
+        async def wait_until_cancelled(*_: object, **__: object) -> dict:
+            started.set()
+            await asyncio.Event().wait()
+            return {}
+
+        with patch.object(QuestionIngestionService, "ingest", new=wait_until_cancelled):
+            service.enqueue(job["id"])
+            await asyncio.wait_for(started.wait(), timeout=1)
+            cancelled = service.cancel_job(job["id"])
+            task = QuestionIngestionService._tasks[job["id"]]
+            await asyncio.gather(task, return_exceptions=True)
+
+        self.assertEqual(cancelled["control_state"], "cancelled")
+        self.assertEqual(cancelled["result_status"], "cancelled")
+        self.assertNotIn(job["id"], QuestionIngestionService._tasks)
 
     def test_completed_ingestion_update_can_be_deleted_but_active_one_cannot(self) -> None:
         service = QuestionIngestionService()

@@ -28,10 +28,9 @@ async def ingest_questions(
         service = QuestionIngestionService()
         service.ensure_configuration()
         job = service.create_job(filename, content=content, content_type=file.content_type if file else None, source_text=source_text, conversion_note=conversion_note)
-        # Starlette runs background tasks only after the 202 response is sent.
-        # PDF extraction/OCR is synchronous and can otherwise block this API
-        # worker before the frontend proxy receives the accepted job.
-        background_tasks.add_task(QuestionIngestionService().run_job, job["id"])
+        # Start only after the 202 response has been sent. enqueue() retains
+        # the task handle so pause/cancel can stop active local processing.
+        background_tasks.add_task(QuestionIngestionService.enqueue_after_response, job["id"])
         return {"job": job}
     except ModelConfigurationError as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
@@ -70,7 +69,7 @@ def pause_ingestion_job(job_id: str) -> dict:
 
 
 @router.post("/ingestion-jobs/{job_id}/resume")
-def resume_ingestion_job(job_id: str) -> dict:
+async def resume_ingestion_job(job_id: str) -> dict:
     try:
         return {"job": QuestionIngestionService().resume_job(job_id)}
     except IngestionError as error:
