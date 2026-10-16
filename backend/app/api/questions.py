@@ -48,6 +48,9 @@ async def ingest_questions(
     solutions_file: UploadFile | None = File(default=None),
 ) -> dict:
     try:
+        # Browsers can submit an unselected file input as an UploadFile with
+        # an empty filename. Treat it as absent, including for optional files.
+        file = file if file and file.filename else None
         content = await file.read() if file else b""
         filename = file.filename if file else "pasted-question.txt"
         if not source_text.strip() and not content:
@@ -58,6 +61,7 @@ async def ingest_questions(
         service.ensure_configuration()
         attachments = []
         for kind, text, upload in (("answer_key", answer_key_text, answer_key_file), ("solutions", solutions_text, solutions_file)):
+            upload = upload if upload and upload.filename else None
             if text.strip() or upload:
                 attachment_content = await upload.read() if upload else b""
                 if len(attachment_content) > MAX_UPLOAD_BYTES:

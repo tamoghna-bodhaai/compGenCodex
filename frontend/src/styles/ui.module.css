@@ -483,3 +483,21 @@
 .taxonomyTopic { border-left-color: var(--accent-soft); }
 .taxonomyHeading:focus-visible, .taxonomyLeaf:focus-visible, .button:focus-visible, .navLink:focus-visible, .mobileNav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 560px) { .taxonomyIntro { align-items: flex-start; flex-direction: column; } }
+
+.sourceReviewContent { max-width: 1360px; }
+.sourceReviewLayout { display: grid; gap: 24px; }
+.sourceReviewTools, .sourceReviewQuestion { border: 1px solid var(--line); border-radius: 14px; background: #fff; padding: 20px; }
+.sourceReviewTools, .sourceReviewQuestion, .sourceReviewQuestions { display: grid; gap: 16px; }
+.sourceReviewTools p, .sourceReviewQuestion p { margin: 0; }
+.sourceReviewTools details { border-top: 1px solid var(--line); padding-top: 12px; }
+.sourceReviewTools summary { cursor: pointer; font-weight: 650; }
+.sourceReviewFilters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.sourceReviewFilters label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; }
+.sourceReviewQuestions h2 { margin: 0; font-size: 20px; }
+.sourceReviewQuestion { min-width: 0; line-height: 1.6; }
+.sourceReviewQuestion header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.sourceReviewQuestion header span { color: var(--muted); font-size: 12px; }
+.sourceReviewQuestion section { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.sourceReviewQuestion button { justify-self: start; }
+.sourceReviewOptions { display: grid; gap: 10px; margin: 0; padding-left: 28px; }
+@media (max-width: 700px) { .sourceReviewFilters { grid-template-columns: 1fr; } }

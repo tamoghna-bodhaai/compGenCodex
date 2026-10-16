@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, patch
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 
-from app.api.questions import list_questions
+from fastapi import BackgroundTasks, UploadFile
+
+from app.api.questions import ingest_questions, list_questions
 from app.services.openrouter import ModelConfigurationError
 from app.services.ingestion import MAX_CHUNK_CHARACTERS, MAX_UPLOAD_BYTES, IngestionError, QuestionIngestionService, _best_pdf_pages, chunk_source, extract_source
 
@@ -71,6 +73,40 @@ class QuestionIngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored["count"], 1)
         self.assertEqual(stored["items"][0]["question_json"]["options"], CLASSIFIED_RESPONSE["questions"][0]["options"])
         self.assertEqual(stored["items"][0]["verification_status"], "pending_review")
+
+    async def test_empty_optional_file_inputs_do_not_reject_ingestion(self) -> None:
+        uploads: list[UploadFile] = []
+
+        def upload(filename: str, content: bytes = b"") -> UploadFile:
+            source = tempfile.SpooledTemporaryFile(max_size=1024)
+            source.write(content)
+            source.seek(0)
+            result = UploadFile(file=source, filename=filename)
+            uploads.append(result)
+            return result
+
+        try:
+            with (
+                patch.object(QuestionIngestionService, "ensure_configuration"),
+                patch.object(QuestionIngestionService, "create_job", return_value={"id": "job-1"}) as create_job,
+                patch("app.api.questions.add_attachment") as add_attachment,
+            ):
+                result = await ingest_questions(
+                    BackgroundTasks(),
+                    source_text="",
+                    conversion_note="",
+                    answer_key_text="",
+                    solutions_text="",
+                    file=upload("questions.pdf", b"pdf"),
+                    answer_key_file=upload(""),
+                    solutions_file=upload(""),
+                )
+        finally:
+            for item in uploads:
+                await item.close()
+        self.assertEqual(result["job"]["id"], "job-1")
+        self.assertEqual(create_job.call_args.kwargs["content"], b"pdf")
+        add_attachment.assert_not_called()
 
     def test_extract_source_accepts_pasted_text_and_rejects_unknown_uploads(self) -> None:
         source = extract_source(filename="pasted.txt", content_type="text/plain", content=b"", source_text="A question")
