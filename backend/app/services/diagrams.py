@@ -62,7 +62,7 @@ def crop_normalized_page(page_base64: str, bbox: list[float]) -> bytes:
 def store_diagram(*, owner_column: str, owner_id: str, provenance: str, data: bytes | None, description: str,
                   render_spec: str = "", source_page: int | None = None, crop: dict | None = None,
                   generation_prompt: str | None = None, model: str | None = None,
-                  validation_status: str = "accepted", validation_notes: str = "") -> dict:
+                  validation_status: str = "accepted", validation_notes: str = "", option_index: int | None = None) -> dict:
     if owner_column not in {"seed_question_id", "paper_question_id"}:
         raise ValueError("Unsupported diagram owner.")
     diagram_id, now = str(uuid.uuid4()), _now()
@@ -79,9 +79,9 @@ def store_diagram(*, owner_column: str, owner_id: str, provenance: str, data: by
         path = str(target.relative_to(ROOT_DIR))
     with get_connection() as connection:
         connection.execute(
-            f"INSERT INTO question_diagrams (id, {owner_column}, storage_path, mime_type, width, height, sha256, provenance, source_page, crop_json, description, render_spec, generation_prompt, model, validation_status, validation_notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO question_diagrams (id, {owner_column}, storage_path, mime_type, width, height, sha256, provenance, source_page, crop_json, description, render_spec, generation_prompt, model, validation_status, validation_notes, option_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (diagram_id, owner_id, path, mime, width, height, digest, provenance, source_page, json.dumps(crop) if crop else None,
-             description, render_spec, generation_prompt, model, validation_status, validation_notes, now, now),
+             description, render_spec, generation_prompt, model, validation_status, validation_notes, option_index, now, now),
         )
     return get_diagram(diagram_id) or {}
 

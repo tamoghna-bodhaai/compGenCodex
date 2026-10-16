@@ -53,6 +53,21 @@ export interface QuestionDiagram {
   provenance: "source_crop" | "generated";
   validation_status: string;
   validation_notes?: string;
+  option_index?: number | null;
+}
+
+export interface ResponseSpec {
+  version: number;
+  mode: "select" | "numeric" | "matching" | "subjective" | "unknown";
+  min_selections?: number | null;
+  max_selections?: number | null;
+  numeric?: { integer_only?: boolean; permitted_precision?: number | null; rounding_rule?: string | null; tolerance?: number | null; accepted_min?: number | null; accepted_max?: number | null } | null;
+  list_i?: string[];
+  list_ii?: string[];
+  answer_combinations?: string[];
+  marking?: { full?: number | null; negative?: number | null; zero?: number; partial?: Record<string, number>; source_instructions?: string | null };
+  instructions?: string | null;
+  supported_for_generation?: boolean;
 }
 
 export interface PaperQuestion {
@@ -196,6 +211,27 @@ export interface SeedQuestion {
   question_json: QuestionJson;
   answer_json?: { correct_answer?: string | null } | null;
   diagrams?: QuestionDiagram[];
+  source_job_id?: string | null;
+  source_question_number?: number | null;
+  exam_format?: Record<string, string> | null;
+  response_spec?: ResponseSpec;
+  question_group?: { id?: string; type?: string; shared_stem?: string } | null;
+  answer_provenance?: string | null;
+  solution_provenance?: string | null;
+  solution?: string | null;
+}
+
+export interface IngestionReport {
+  job: IngestionJob;
+  summary: { accepted: number; review_needed: number; skipped_chunks: number; retryable_chunks: number; diagrams: number };
+  formats: Record<string, number>;
+  taxonomy: Record<string, number>;
+  groups: Record<string, number>;
+  chunks: Array<{ position: number; state: string; question_count: number }>;
+  candidates: Array<{ id: string; source_question_number: number; status: string; validation_notes: string; payload: Record<string, unknown> }>;
+  questions: SeedQuestion[];
+  mappings: Array<{ id: string; source_question_number: number; question_id: string | null; status: string; note: string }>;
+  attachments: Array<{ id: string; kind: string; filename: string; created_at: string }>;
 }
 
 export interface SeedComparison {
@@ -310,4 +346,9 @@ export interface BankSelection {
   chapter?: string;
   topic?: string;
   subtopic?: string;
+  source_job_id?: string;
+  paper?: string;
+  section?: string;
+  response_mode?: string;
+  verification_status?: string;
 }

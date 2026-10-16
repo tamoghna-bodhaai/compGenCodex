@@ -25,6 +25,13 @@ CREATE TABLE IF NOT EXISTS questions (
   marks INTEGER,
   source TEXT,
   source_reference TEXT,
+  source_job_id UUID,
+  source_question_number INTEGER,
+  exam_format_json JSONB,
+  response_spec_json JSONB,
+  question_group_json JSONB,
+  answer_provenance TEXT,
+  solution_provenance TEXT,
   verification_status TEXT NOT NULL DEFAULT 'pending',
   embedding vector(1536),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -80,9 +87,14 @@ CREATE TABLE IF NOT EXISTS question_diagrams (
   storage_path TEXT, mime_type TEXT, width INTEGER, height INTEGER, sha256 TEXT,
   provenance TEXT NOT NULL CHECK (provenance IN ('source_crop', 'generated')),
   source_page INTEGER, crop_json JSONB, description TEXT NOT NULL DEFAULT '', render_spec TEXT NOT NULL DEFAULT '',
+  option_index INTEGER,
   generation_prompt TEXT, model TEXT, validation_status TEXT NOT NULL DEFAULT 'pending', validation_notes TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((seed_question_id IS NOT NULL) <> (paper_question_id IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS source_audit (
+  id UUID PRIMARY KEY, source_name TEXT NOT NULL, question_count INTEGER NOT NULL, deleted_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS generation_logs (

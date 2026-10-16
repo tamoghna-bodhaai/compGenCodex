@@ -22,7 +22,7 @@ export function NewPaperScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [seedPickerKey, setSeedPickerKey] = useState<string | null>(null);
 
-  useEffect(() => { const controller = new AbortController(); api.catalog(controller.signal).then((result) => setCatalog(result.items)).catch((caught) => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Couldn’t load the catalog."); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => controller.abort(); }, []);
+  useEffect(() => { const controller = new AbortController(); api.catalog(controller.signal, true).then((result) => setCatalog(result.items)).catch((caught) => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Couldn’t load the catalog."); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => controller.abort(); }, []);
 
   const view = useMemo(() => {
     const subjectRows = catalogRows(catalog, { exam: [creation.exam], subject: [creation.subject] });

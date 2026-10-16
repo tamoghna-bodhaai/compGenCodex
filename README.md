@@ -15,6 +15,14 @@ Local MVP foundation for a teacher-facing JEE question-paper generator. The firs
 - Print-ready DOCX and PDF exports with branded paper details, candidate fields, sections, options, and answer-key variants.
 - A verified visual transcription of the supplied PDF stored as structured JSON.
 
+## JEE assessment formats and source review
+
+Newly ingested questions keep the existing display `question_type` and also store a versioned `exam_format` and `response_spec`. The response spec records selection cardinality, numeric rules, matching lists, and the source marking instructions. Older questions receive a non-destructive default response spec when read. JEE Advanced questions without explicit section rules stay in the per-source review queue.
+
+The question bank shows source history and a per-job report with taxonomy, format, group, diagram, candidate, and answer-mapping details. The source review can export accepted questions and an answer key as DOCX, with stem and option images. Answer keys and solutions can be pasted or uploaded with the source or attached later. Numbered entries map directly to source question numbers; unnumbered entries map by order only when the counts and question numbers are unambiguous. Ambiguous entries can be mapped manually. Direct source mapping does not use a model.
+
+`DELETE /api/questions/{id}` removes one bank question. `DELETE /api/questions/ingestion-jobs/{id}` permanently removes a completed source and its linked bank questions, media, attachments, candidates, and mappings, retaining a compact audit row. Generated paper questions remain historical snapshots. `POST /api/questions/solutions/generate` queues missing bank solutions in a job, subject, chapter, topic, subtopic, or explicit question scope; generated content is marked pending review.
+
 The source paper is titled *Test on Definite Integrals*. Its questions are imported under `Mathematics > Calculus > Definite Integrals`, not Indefinite Integrals. Each source item is intentionally marked `transcription_pending`: the PDF has no answer key or solutions, so no answers have been guessed.
 
 ## Local setup

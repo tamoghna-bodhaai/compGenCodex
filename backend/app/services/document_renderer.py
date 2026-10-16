@@ -940,12 +940,22 @@ class PaperDocumentRenderer:
                 if payload.get("marks"):
                     doc.paragraphs[-1].add_run(f"  [{payload['marks']} marks]").italic = True
                 for diagram in question.get("diagrams") or []:
+                    if diagram.get("option_index") is not None:
+                        continue
                     path = asset_path(diagram)
                     if path:
                         image_line = doc.add_paragraph()
                         image_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         image_line.add_run().add_picture(str(path), width=Inches(4.8))
                 self._add_options_table(doc, options)
+                for diagram in question.get("diagrams") or []:
+                    if diagram.get("option_index") is None:
+                        continue
+                    path = asset_path(diagram)
+                    if path:
+                        image_line = doc.add_paragraph()
+                        image_line.add_run(f"Option {chr(65 + int(diagram['option_index']))}: ")
+                        image_line.add_run().add_picture(str(path), width=Inches(3.2))
                 number += 1
 
     @staticmethod
@@ -1247,12 +1257,21 @@ class PaperDocumentRenderer:
                 marks_suffix = f" \\hfill [{self._latex_escape(marks_q)} marks]" if marks_q else ""
                 lines.append(rf"\item {stem}{marks_suffix}")
                 for diagram in question.get("diagrams") or []:
+                    if diagram.get("option_index") is not None:
+                        continue
                     path = asset_path(diagram)
                     if path:
                         lines.append(rf"\begin{{center}}\includegraphics[width=.72\linewidth]{{{self._latex_escape(str(path))}}}\end{{center}}")
                 options = list(payload.get("options") or [])
                 if options:
                     lines.append(self._latex_options(options))
+                for diagram in question.get("diagrams") or []:
+                    if diagram.get("option_index") is None:
+                        continue
+                    path = asset_path(diagram)
+                    if path:
+                        label = chr(65 + int(diagram["option_index"]))
+                        lines.append(rf"\begin{{center}}Option {label}: \includegraphics[width=.42\linewidth]{{{self._latex_escape(str(path))}}}\end{{center}}")
             lines.append(r"\end{enumerate}")
         lines.append(r"\end{document}")
         return "\n".join(lines)

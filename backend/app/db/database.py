@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -229,6 +230,27 @@ CREATE TABLE IF NOT EXISTS app_migrations (
     name TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS source_attachments (
+    id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL, filename TEXT, content BLOB, text_content TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS source_mappings (
+    id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+    attachment_id TEXT REFERENCES source_attachments(id) ON DELETE CASCADE,
+    source_question_number INTEGER, question_id TEXT REFERENCES questions(id) ON DELETE SET NULL,
+    answer_json TEXT, solution TEXT, status TEXT NOT NULL, note TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS source_audit (
+    id TEXT PRIMARY KEY, source_name TEXT NOT NULL, question_count INTEGER NOT NULL,
+    deleted_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bank_solution_jobs (
+    id TEXT PRIMARY KEY, source_job_id TEXT, scope_json TEXT NOT NULL, state TEXT NOT NULL,
+    total_questions INTEGER NOT NULL, completed_questions INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 """
 
 
@@ -293,6 +315,30 @@ def initialize_database(path: Path | None = None) -> Path:
         ):
             if column not in ingestion_columns:
                 connection.execute(f"ALTER TABLE ingestion_jobs ADD COLUMN {column} {definition}")
+        question_columns = {row[1] for row in connection.execute("PRAGMA table_info(questions)")}
+        for column, definition in (
+            ("source_job_id", "TEXT REFERENCES ingestion_jobs(id) ON DELETE SET NULL"),
+            ("source_question_number", "INTEGER"),
+            ("exam_format_json", "TEXT"),
+            ("response_spec_json", "TEXT"),
+            ("question_group_json", "TEXT"),
+            ("answer_provenance", "TEXT"),
+            ("solution_provenance", "TEXT"),
+        ):
+            if column not in question_columns:
+                connection.execute(f"ALTER TABLE questions ADD COLUMN {column} {definition}")
+        diagram_columns = {row[1] for row in connection.execute("PRAGMA table_info(question_diagrams)")}
+        if "option_index" not in diagram_columns:
+            connection.execute("ALTER TABLE question_diagrams ADD COLUMN option_index INTEGER")
+        lineage_migration = "backfill_ingestion_lineage_v1"
+        if not connection.execute("SELECT 1 FROM app_migrations WHERE name = ?", (lineage_migration,)).fetchone():
+            for job in connection.execute("SELECT id FROM ingestion_jobs").fetchall():
+                prefix = f"ingested-{job[0][:12]}-%"
+                rows = connection.execute("SELECT id, source_reference FROM questions WHERE source_job_id IS NULL AND source_key LIKE ?", (prefix,)).fetchall()
+                for identifier, reference in rows:
+                    match = re.search(r"question\s+(\d+)", reference or "", re.I)
+                    connection.execute("UPDATE questions SET source_job_id = ?, source_question_number = COALESCE(source_question_number, ?) WHERE id = ?", (job[0], int(match.group(1)) if match else None, identifier))
+            connection.execute("INSERT INTO app_migrations (name) VALUES (?)", (lineage_migration,))
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(papers)")}
         if "branding_template_id" not in paper_columns:
             connection.execute("ALTER TABLE papers ADD COLUMN branding_template_id TEXT")
@@ -339,4 +385,11 @@ def decode_question_row(row: sqlite3.Row) -> dict:
     for column in ("secondary_concepts", "question_json", "answer_json"):
         if result[column] is not None:
             result[column] = json.loads(result[column])
+    from app.schemas.assessment import legacy_response_spec
+    for column in ("exam_format_json", "response_spec_json", "question_group_json"):
+        if column in result and result[column] is not None:
+            result[column.removesuffix("_json")] = json.loads(result[column])
+        result.pop(column, None)
+    if not result.get("response_spec"):
+        result["response_spec"] = legacy_response_spec(result["question_type"], len(result["question_json"].get("options", []))).model_dump()
     return result

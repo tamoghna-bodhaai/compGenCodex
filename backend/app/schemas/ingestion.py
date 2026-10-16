@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.generation import QuestionType
+from app.schemas.assessment import ResponseSpec, ExamFormat, QuestionGroup
 
 
 class ClassifiedSeedQuestion(BaseModel):
@@ -25,7 +26,7 @@ class ClassifiedSeedQuestion(BaseModel):
     difficulty: int = Field(ge=1, le=5)
     stem: str = Field(min_length=1)
     options: list[str] = Field(default_factory=list)
-    correct_answer: str | None = None
+    correct_answer: str | list[str] | dict[str, str] | None = None
     solution: str | None = None
     expected_time_minutes: int | None = Field(default=None, ge=1, le=60)
     marks: int | None = Field(default=None, ge=1, le=100)
@@ -33,17 +34,25 @@ class ClassifiedSeedQuestion(BaseModel):
     diagram_bbox: list[float] | None = None
     diagram_description: str | None = None
     diagram_render_spec: str | None = None
+    option_diagrams: dict[int, list[float]] = Field(default_factory=dict)
+    exam_format: ExamFormat | None = None
+    response_spec: ResponseSpec | None = None
+    question_group: QuestionGroup | None = None
+    format_uncertain: bool = False
 
     @model_validator(mode="after")
     def validate_shape(self) -> "ClassifiedSeedQuestion":
         if any(not option.strip() for option in self.options):
             raise ValueError("options cannot contain empty values")
-        if self.question_type == QuestionType.SINGLE_CORRECT and len(self.options) != 4:
+        structured_mode = self.response_spec.mode if self.response_spec else None
+        if self.question_type == QuestionType.SINGLE_CORRECT and len(self.options) != 4 and not (self.response_spec and structured_mode == "select" and len(self.options) >= 2) and structured_mode not in {"matching", "unknown"}:
             raise ValueError("single-correct MCQs require exactly four options")
         if self.question_type == QuestionType.MULTIPLE_CORRECT and len(self.options) < 2:
             raise ValueError("multiple-correct MCQs require at least two options")
-        if self.question_type in {QuestionType.NUMERICAL, QuestionType.SUBJECTIVE} and self.options:
+        if self.question_type in {QuestionType.NUMERICAL, QuestionType.SUBJECTIVE} and self.options and structured_mode not in {"matching", "unknown"}:
             raise ValueError("numerical and subjective questions cannot include options")
+        if self.response_spec and self.response_spec.mode == "select" and self.response_spec.max_selections is not None and self.response_spec.max_selections > len(self.options):
+            raise ValueError("selection cardinality exceeds the available options")
         if self.diagram_bbox is not None and (len(self.diagram_bbox) != 4 or any(value < 0 or value > 1 for value in self.diagram_bbox)):
             raise ValueError("diagram_bbox must contain normalized x, y, width, height values between 0 and 1")
         if self.diagram_required and (not self.diagram_bbox or not self.diagram_description):

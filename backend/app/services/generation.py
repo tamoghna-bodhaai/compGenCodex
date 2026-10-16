@@ -65,7 +65,10 @@ def _deterministic_failure(question: GeneratedQuestion, slot: GenerationSlot) ->
     if slot.question_type.value in {"single_correct_mcq", "multiple_correct_mcq"}:
         answer = question.correct_answer.strip()
         labels = {chr(ord("A") + index) for index in range(len(question.options))}
-        if answer.upper() not in labels and answer not in question.options:
+        selections = [part.strip().upper() for part in re.split(r"[,/&+]", answer)]
+        if (slot.question_type.value == "multiple_correct_mcq" and len(selections) > 1 and all(part in labels for part in selections)):
+            pass
+        elif answer.upper() not in labels and answer not in question.options:
             return "MCQ answer does not identify one of the supplied options."
     return None
 
@@ -384,6 +387,14 @@ class GenerationService:
         async def check(candidate: _Candidate) -> _Candidate:
             async with semaphore:
                 failure = _deterministic_failure(candidate.question, candidate.slot)
+                if not failure and candidate.seeds and getattr(candidate.seeds[0], "response_spec", None):
+                    from app.schemas.assessment import ResponseSpec, validate_answer
+                    spec = ResponseSpec.model_validate(candidate.seeds[0].response_spec)
+                    answer: object = candidate.question.correct_answer
+                    if spec.mode == "select" and spec.max_selections != 1:
+                        answer = [part.strip().upper() for part in re.split(r"[,/&+]", str(answer))]
+                    if not validate_answer(spec, answer, len(candidate.question.options)):
+                        failure = "Generated answer violates the source response rule."
                 if failure:
                     await self._event(phase="deterministic_validation", outcome="rejected", slot=candidate.slot.slot, attempt=candidate.attempt, model=candidate.generation_model, failure=failure)
                     self._log(request, slot=candidate.slot, seeds=candidate.seeds, status="retrying", failure_reason=failure, model=candidate.generation_model)

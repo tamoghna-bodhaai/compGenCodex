@@ -7,8 +7,33 @@ from app.services.ingestion import IngestionError, MAX_UPLOAD_BYTES, QuestionIng
 from app.services.openrouter import ModelConfigurationError, OpenRouterError
 from app.services.costs import cost_summary
 from app.services.diagrams import diagrams_for
+from app.services.source_material import add_attachment, attachment_text, delete_question as remove_bank_question, map_manually, promote_candidate
+from app.services.bank_solutions import queue_solution_job, get_solution_job, run_solution_job
+from pydantic import BaseModel, Field
+from pathlib import Path
+import tempfile
+from app.services.document_renderer import PaperDocumentRenderer, DocumentRenderError
+from app.schemas.papers import ExportFormat, ExportVariant
 
 router = APIRouter(prefix="/api/questions", tags=["questions"])
+
+
+class SolutionScope(BaseModel):
+    source_job_id: str | None = None
+    question_ids: list[str] | None = None
+    subject: str | None = None
+    chapter: str | None = None
+    topic: str | None = None
+    subtopic: str | None = None
+    replace_existing: bool = False
+
+
+class ManualMapping(BaseModel):
+    question_id: str
+
+
+class CandidateReview(BaseModel):
+    changes: dict = Field(default_factory=dict)
 
 
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
@@ -16,7 +41,11 @@ async def ingest_questions(
     background_tasks: BackgroundTasks,
     source_text: str = Form(default=""),
     conversion_note: str = Form(default=""),
+    answer_key_text: str = Form(default=""),
+    solutions_text: str = Form(default=""),
     file: UploadFile | None = File(default=None),
+    answer_key_file: UploadFile | None = File(default=None),
+    solutions_file: UploadFile | None = File(default=None),
 ) -> dict:
     try:
         content = await file.read() if file else b""
@@ -27,7 +56,18 @@ async def ingest_questions(
             raise IngestionError("Uploads must be 35 MB or smaller.")
         service = QuestionIngestionService()
         service.ensure_configuration()
+        attachments = []
+        for kind, text, upload in (("answer_key", answer_key_text, answer_key_file), ("solutions", solutions_text, solutions_file)):
+            if text.strip() or upload:
+                attachment_content = await upload.read() if upload else b""
+                if len(attachment_content) > MAX_UPLOAD_BYTES:
+                    raise IngestionError("Attachments must be 35 MB or smaller.")
+                attachment_name = upload.filename if upload else "pasted.txt"
+                prepared_text = text.strip() or attachment_text(attachment_name, attachment_content)
+                attachments.append((kind, attachment_name, attachment_content, prepared_text))
         job = service.create_job(filename, content=content, content_type=file.content_type if file else None, source_text=source_text, conversion_note=conversion_note)
+        for kind, attachment_name, attachment_content, prepared_text in attachments:
+            add_attachment(job["id"], kind, filename=attachment_name, content=attachment_content, text=prepared_text, map_now=False)
         # Start only after the 202 response has been sent. enqueue() retains
         # the task handle so pause/cancel can stop active local processing.
         background_tasks.add_task(QuestionIngestionService.enqueue_after_response, job["id"])
@@ -92,6 +132,77 @@ def ingestion_report(job_id: str) -> dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
 
+@router.get("/ingestion-jobs/{job_id}/export")
+def export_ingested_source(job_id: str, format: ExportFormat = ExportFormat.DOCX, variant: ExportVariant = ExportVariant.QUESTION_PAPER) -> Response:
+    try:
+        report = QuestionIngestionService().report(job_id)
+    except IngestionError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    questions = report["questions"]
+    if not questions:
+        raise HTTPException(status_code=422, detail="This source has no accepted questions to export.")
+    for position, question in enumerate(questions, 1):
+        question["section_id"] = None
+        question["position"] = position
+        answer = (question.get("answer_json") or {}).get("correct_answer")
+        if isinstance(answer, list):
+            question["answer_json"] = {"correct_answer": ", ".join(map(str, answer))}
+        elif isinstance(answer, dict):
+            question["answer_json"] = {"correct_answer": ", ".join(f"{key}→{value}" for key, value in answer.items())}
+        question["question_json"].setdefault("marks", question.get("marks"))
+        question["question_json"].setdefault("primary_concept", question.get("primary_concept"))
+    paper = {"id": job_id, "title": report["job"]["source_name"], "exam": questions[0]["exam"], "subject": questions[0]["subject"],
+             "branding_config": {}, "sections": [], "questions": questions}
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            path, media_type = PaperDocumentRenderer(output_root=Path(directory)).export(paper, output_format=format, variant=variant)
+            content = path.read_bytes()
+            filename = path.name
+    except DocumentRenderError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.post("/ingestion-jobs/{job_id}/attachments")
+async def attach_source_material(job_id: str, kind: str = Form(...), text: str = Form(default=""), file: UploadFile | None = File(default=None)) -> dict:
+    try:
+        content = await file.read() if file else b""
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise ValueError("Attachments must be 35 MB or smaller.")
+        if not text.strip() and not content:
+            raise ValueError("Paste or upload an answer key or solutions.")
+        job = QuestionIngestionService().get_job(job_id)
+        return add_attachment(job_id, kind, filename=file.filename if file else "pasted.txt", content=content, text=text, map_now=job["state"] == "succeeded")
+    except (LookupError, IngestionError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post("/ingestion-jobs/{job_id}/mappings/{mapping_id}")
+def resolve_source_mapping(job_id: str, mapping_id: str, request: ManualMapping) -> dict:
+    try:
+        QuestionIngestionService().get_job(job_id)
+        with get_connection() as connection:
+            if not connection.execute("SELECT 1 FROM source_mappings WHERE id = ? AND job_id = ?", (mapping_id, job_id)).fetchone():
+                raise LookupError("Mapping not found in this source.")
+        return map_manually(mapping_id, request.question_id)
+    except (LookupError, IngestionError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post("/ingestion-jobs/{job_id}/candidates/{candidate_id}/promote")
+def accept_review_candidate(job_id: str, candidate_id: str, review: CandidateReview) -> dict:
+    try:
+        return promote_candidate(job_id, candidate_id, review.changes)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @router.delete("/ingestion-jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_ingestion_job(job_id: str) -> Response:
     try:
@@ -100,6 +211,24 @@ def delete_ingestion_job(job_id: str) -> Response:
     except IngestionError as error:
         status_code = status.HTTP_409_CONFLICT if "active" in str(error).lower() else status.HTTP_404_NOT_FOUND
         raise HTTPException(status_code=status_code, detail=str(error)) from error
+
+
+@router.post("/solutions/generate", status_code=status.HTTP_202_ACCEPTED)
+def generate_bank_solutions(scope: SolutionScope, background_tasks: BackgroundTasks) -> dict:
+    try:
+        job = queue_solution_job(**scope.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    background_tasks.add_task(run_solution_job, job["id"])
+    return {"job": job}
+
+
+@router.get("/solution-jobs/{job_id}")
+def bank_solution_job(job_id: str) -> dict:
+    try:
+        return get_solution_job(job_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.get("")
@@ -113,6 +242,10 @@ def list_questions(
     question_type: str | None = None,
     difficulty: int | None = None,
     verification_status: str | None = None,
+    source_job_id: str | None = None,
+    paper: str | None = None,
+    section: str | None = None,
+    response_mode: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
@@ -131,9 +264,15 @@ def list_questions(
         ("question_type", question_type),
         ("difficulty", difficulty),
         ("verification_status", verification_status),
+        ("source_job_id", source_job_id),
     ):
         if value is not None:
             clauses.append(f"{column} = ?")
+            parameters.append(value)
+    for path, value in (("paper", paper), ("section", section), ("mode", response_mode)):
+        if value is not None:
+            column = "exam_format_json" if path != "mode" else "response_spec_json"
+            clauses.append(f"json_extract({column}, '$.{path}') = ?")
             parameters.append(value)
     def values_or_empty(value: list[str] | None) -> list[str]:
         # Direct service tests call this function without FastAPI resolving
@@ -157,16 +296,18 @@ def list_questions(
 
 
 @router.get("/catalog")
-def question_catalog() -> dict:
+def question_catalog(supported_only: bool = False) -> dict:
     """Return the seed-bank taxonomy and its availability without exposing question text."""
     with get_connection() as connection:
         rows = connection.execute(
             """
             SELECT exam, subject, chapter, topic, subtopic, question_type, difficulty, COUNT(*) AS count
             FROM questions
+            WHERE (? = 0 OR response_spec_json IS NULL OR json_extract(response_spec_json, '$.supported_for_generation') = 1)
             GROUP BY exam, subject, chapter, topic, subtopic, question_type, difficulty
             ORDER BY exam, subject, chapter, topic, subtopic, question_type, difficulty
-            """
+            """,
+            (int(supported_only),),
         ).fetchall()
     return {"items": [dict(row) for row in rows]}
 
@@ -180,3 +321,12 @@ def get_question(question_id: str) -> dict:
     item = decode_question_row(row)
     item["diagrams"] = diagrams_for(owner_column="seed_question_id", owner_id=item["id"])
     return item
+
+
+@router.delete("/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_question(question_id: str) -> Response:
+    try:
+        remove_bank_question(question_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return Response(status_code=204)

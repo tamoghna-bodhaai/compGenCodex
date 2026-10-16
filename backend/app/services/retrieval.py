@@ -21,6 +21,7 @@ class RetrievalCandidate:
     difficulty: int
     question_json: dict
     score: float
+    response_spec: dict | None = None
 
     def prompt_payload(self) -> dict:
         diagrams = diagrams_for(owner_column="seed_question_id", owner_id=self.id)
@@ -32,6 +33,7 @@ class RetrievalCandidate:
             "difficulty": self.difficulty,
             "stem": self.question_json["stem"],
             "options": self.question_json.get("options", []),
+            "response_spec": self.response_spec,
             "diagram": ({"description": diagram["description"], "render_spec": diagram["render_spec"], "diagram_id": diagram["id"]} if diagram else None),
         }
 
@@ -57,7 +59,7 @@ class MetadataFirstRetriever:
     def retrieve(self, request: GenerationRequest, slot: GenerationSlot, *, candidate_limit: int = 30, seed_count: int = 5) -> list[RetrievalCandidate]:
         if slot.selected_seed_question_ids or slot.selected_seed_question_id:
             return self._retrieve_selected_seeds(request, slot)
-        clauses = ["exam = ?", "subject = ?", "question_type = ?"]
+        clauses = ["exam = ?", "subject = ?", "question_type = ?", "(response_spec_json IS NULL OR json_extract(response_spec_json, '$.supported_for_generation') = 1)"]
         parameters: list[object] = [request.exam, request.subject, slot.question_type.value]
         slot_chapters = slot.chapters or request.chapters
         slot_topics = [slot.topic] if slot.topic else request.topics
@@ -91,6 +93,7 @@ class MetadataFirstRetriever:
                     difficulty=row["difficulty"],
                     question_json=row["question_json"],
                     score=round(metadata_score * 0.7 + semantic_score * 0.3, 4),
+                    response_spec=row.get("response_spec"),
                 )
             )
         return self._select_diverse(candidates, seed_count)
@@ -108,6 +111,8 @@ class MetadataFirstRetriever:
         candidates = []
         for selected_id in selected_ids:
             question = by_id[selected_id]
+            if not question["response_spec"].get("supported_for_generation"):
+                raise RetrievalError("A selected source format is not supported for automatic generation.")
             if question["exam"] != request.exam or question["subject"] != request.subject:
                 raise RetrievalError("A selected source question does not match this paper's exam and subject.")
             if slot.chapters and question.get("chapter") not in slot.chapters:
@@ -120,6 +125,7 @@ class MetadataFirstRetriever:
                 id=question["id"], source_key=question["source_key"], primary_concept=question["primary_concept"],
                 question_archetype=question["question_archetype"], difficulty=question["difficulty"],
                 question_json=question["question_json"], score=1.0,
+                response_spec=question.get("response_spec"),
             ))
         return candidates
 

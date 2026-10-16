@@ -96,11 +96,12 @@ def validate_question(question: dict) -> None:
         question_type = QuestionType(question["question_type"])
     except ValueError as error:
         raise ValueError(f"{question['source_key']}: unsupported question type") from error
-    if question_type == QuestionType.SINGLE_CORRECT and len(options) != 4:
+    structured_mode = (question.get("response_spec") or {}).get("mode")
+    if question_type == QuestionType.SINGLE_CORRECT and len(options) != 4 and not (structured_mode == "select" and len(options) >= 2) and structured_mode not in {"matching", "unknown"}:
         raise ValueError(f"{question['source_key']}: single-correct MCQs require four options")
     if question_type == QuestionType.MULTIPLE_CORRECT and len(options) < 2:
         raise ValueError(f"{question['source_key']}: multiple-correct MCQs require at least two options")
-    if question_type in {QuestionType.NUMERICAL, QuestionType.SUBJECTIVE} and options:
+    if question_type in {QuestionType.NUMERICAL, QuestionType.SUBJECTIVE} and options and structured_mode not in {"matching", "unknown"}:
         raise ValueError(f"{question['source_key']}: {question_type.value} questions cannot include options")
     if not 1 <= question["difficulty"] <= 5:
         raise ValueError(f"{question['source_key']}: difficulty must be 1-5")
@@ -139,6 +140,13 @@ def upsert_questions(questions: list[dict], database_path: Path | None = None) -
                 "source": question["source"],
                 "source_reference": question["source_reference"],
                 "verification_status": question["verification_status"],
+                "source_job_id": question.get("source_job_id"),
+                "source_question_number": question.get("source_question_number"),
+                "exam_format_json": json.dumps(question.get("exam_format")) if question.get("exam_format") else None,
+                "response_spec_json": json.dumps(question.get("response_spec")) if question.get("response_spec") else None,
+                "question_group_json": json.dumps(question.get("question_group")) if question.get("question_group") else None,
+                "answer_provenance": question.get("answer_provenance"),
+                "solution_provenance": question.get("solution_provenance"),
                 "created_at": now,
                 "updated_at": now,
             }

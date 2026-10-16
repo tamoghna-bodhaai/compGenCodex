@@ -21,11 +21,12 @@ from app.core.settings import get_settings
 from app.core.error_safety import safe_error_message
 from app.prompts.ingestion import INGESTION_SYSTEM_PROMPT, build_ingestion_prompt
 from app.schemas.ingestion import ClassificationResponse
-from app.db.database import get_connection
+from app.db.database import get_connection, decode_question_row
 from app.services.openrouter import ModelConfigurationError, OpenRouterClient, OpenRouterError
 from app.services.seed_import import upsert_questions
 from app.services.lifecycle import emit_event
 from app.services.diagrams import crop_normalized_page, store_diagram
+from app.schemas.assessment import legacy_response_spec, NumericRule, ResponseSpec, validate_answer, rendered_stem, generator_compatible
 
 MAX_UPLOAD_BYTES = 35 * 1024 * 1024
 # A classified question includes substantial metadata, so a 28k-character
@@ -104,6 +105,37 @@ def _render_pdf_pages_for_vision(content: bytes) -> list[tuple[int, str]]:
         return pages
     finally:
         document.close()
+
+
+def _render_docx_images_for_vision(content: bytes) -> str | None:
+    """Make one labeled sheet of embedded images for question/option crops."""
+    from PIL import Image, ImageDraw
+
+    document = Document(io.BytesIO(content))
+    images = []
+    for rel in document.part.rels.values():
+        if "image" not in rel.reltype:
+            continue
+        try:
+            with Image.open(io.BytesIO(rel.target_part.blob)) as original:
+                picture = original.convert("RGB")
+                picture.thumbnail((850, 700))
+                images.append(picture.copy())
+        except (OSError, ValueError):
+            continue
+    if not images:
+        return None
+    sheet = Image.new("RGB", (900, sum(image.height + 42 for image in images) + 20), "white")
+    painter = ImageDraw.Draw(sheet)
+    top = 10
+    for index, picture in enumerate(images, 1):
+        painter.text((12, top), f"Embedded image {index}", fill="black")
+        top += 25
+        sheet.paste(picture, (12, top))
+        top += picture.height + 17
+    output = io.BytesIO()
+    sheet.save(output, format="PNG")
+    return base64.b64encode(output.getvalue()).decode("ascii")
 
 
 def _extract_pdf_with_ocr(content: bytes) -> list[tuple[int | None, str]]:
@@ -241,7 +273,7 @@ def extract_source(
                 for row in table.rows:
                     _raise_if_cancelled()
                     parts.extend(cell.text.strip() for cell in row.cells if cell.text.strip())
-            pages = [(None, "\n".join(parts))]
+            pages = [(1, "\n".join(parts))]
         except Exception as error:
             raise IngestionError("This DOCX could not be read. Paste its question text instead.") from error
     else:
@@ -278,6 +310,7 @@ def _prepare_source_for_ingestion(
             use_vision=use_vision,
         )
         is_pdf = Path(filename).suffix.lower() == ".pdf" or content_type == "application/pdf"
+        is_docx = Path(filename).suffix.lower() == ".docx" or content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         page_images: dict[int, str] = {}
         if is_pdf and include_diagram_pages:
             try:
@@ -286,6 +319,13 @@ def _prepare_source_for_ingestion(
                 raise
             except Exception:
                 page_images = {}
+        if is_docx and include_diagram_pages:
+            try:
+                sheet = _render_docx_images_for_vision(content)
+                if sheet:
+                    page_images[1] = sheet
+            except (OSError, ValueError):
+                pass
         return source, page_images
 
 
@@ -312,6 +352,17 @@ def chunk_source(source: ExtractedSource) -> list[str]:
     if buffer:
         chunks.append(buffer)
     return chunks
+
+
+def format_review_reason(record: dict, spec: ResponseSpec) -> str | None:
+    source_exam = str((record.get("exam_format") or {}).get("exam", "")).lower()
+    if record.get("format_uncertain") or spec.mode == "unknown":
+        return "Response or section marking instructions need manual review."
+    if source_exam == "jee advanced" and (not record.get("response_spec") or not spec.instructions or not spec.marking.source_instructions):
+        return "Response or section marking instructions need manual review."
+    if source_exam == "jee advanced" and spec.mode == "select" and (spec.min_selections is None or spec.max_selections is None):
+        return "Selection cardinality needs manual review."
+    return None
 
 
 class QuestionIngestionService:
@@ -407,14 +458,12 @@ class QuestionIngestionService:
         return [self.get_job(row["id"]) for row in rows]
 
     def delete_job(self, job_id: str) -> None:
-        """Remove a completed ingestion update without touching imported questions."""
-        with get_connection() as connection:
-            row = connection.execute("SELECT state FROM ingestion_jobs WHERE id = ?", (job_id,)).fetchone()
-            if row is None:
-                raise IngestionError("Ingestion job not found.")
-            if row["state"] in {"queued", "running"}:
-                raise IngestionError("An active ingestion update cannot be deleted.")
-            connection.execute("DELETE FROM ingestion_jobs WHERE id = ?", (job_id,))
+        """Delete a source and its linked bank content, preserving paper snapshots."""
+        from app.services.source_material import delete_source
+        try:
+            delete_source(job_id)
+        except (LookupError, ValueError) as error:
+            raise IngestionError(str(error)) from error
 
     def pause_job(self, job_id: str) -> dict:
         job = self.get_job(job_id)
@@ -444,8 +493,20 @@ class QuestionIngestionService:
         job = self.get_job(job_id)
         with get_connection() as connection:
             chunks = [dict(row) for row in connection.execute("SELECT position, state, question_count, error_message, attempts FROM ingestion_chunks WHERE job_id = ? ORDER BY position", (job_id,)).fetchall()]
-            candidates = [dict(row) for row in connection.execute("SELECT source_page, source_question_number, confidence, status, validation_notes FROM ingestion_candidates WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()]
-        return {"job": job, "summary": {"accepted": job.get("accepted_questions", 0), "review_needed": job.get("review_questions", 0), "skipped_chunks": job.get("skipped_chunks", 0), "retryable_chunks": job.get("retryable_chunks", 0)}, "chunks": chunks, "candidates": candidates}
+            candidates = [dict(row) for row in connection.execute("SELECT id, source_page, source_question_number, payload_json, confidence, status, validation_notes, promoted_question_id FROM ingestion_candidates WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()]
+            questions = [decode_question_row(row) for row in connection.execute("SELECT * FROM questions WHERE source_job_id = ? ORDER BY source_question_number", (job_id,)).fetchall()]
+            mappings = [dict(row) for row in connection.execute("SELECT id, source_question_number, question_id, status, note FROM source_mappings WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()]
+            attachments = [dict(row) for row in connection.execute("SELECT id, kind, filename, created_at FROM source_attachments WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()]
+        from collections import Counter
+        from app.services.diagrams import diagrams_for
+        for candidate in candidates:
+            candidate["payload"] = json.loads(candidate.pop("payload_json"))
+        for question in questions:
+            question["diagrams"] = diagrams_for(owner_column="seed_question_id", owner_id=question["id"])
+        formats = Counter(f"{(q.get('exam_format') or {}).get('paper', 'unspecified')} / {(q.get('exam_format') or {}).get('section', 'unspecified')} / {q['response_spec']['mode']}" for q in questions)
+        taxonomy = Counter(f"{c['payload'].get('subject', 'Unknown')} / {c['payload'].get('chapter', 'Unknown')} / {c['payload'].get('topic', 'Unknown')} / {c['payload'].get('subtopic') or '—'}" for c in candidates)
+        groups = Counter((q.get("question_group") or {}).get("id") for q in questions if (q.get("question_group") or {}).get("id"))
+        return {"job": job, "summary": {"extracted": sum(chunk["question_count"] for chunk in chunks), "accepted": job.get("accepted_questions", 0), "review_needed": job.get("review_questions", 0), "skipped_chunks": job.get("skipped_chunks", 0), "retryable_chunks": job.get("retryable_chunks", 0), "diagrams": sum(len(q["diagrams"]) for q in questions)}, "formats": dict(formats), "taxonomy": dict(taxonomy), "groups": dict(groups), "chunks": chunks, "candidates": candidates, "questions": questions, "mappings": mappings, "attachments": attachments}
 
     def _update_job(self, job_id: str, *, state: str | None = None, phase: str | None = None, message: str | None = None,
                     total_chunks: int | None = None, completed_chunks: int | None = None, ingested_questions: int | None = None,
@@ -499,6 +560,11 @@ class QuestionIngestionService:
                 skipped = connection.execute("SELECT COUNT(*) FROM ingestion_chunks WHERE job_id = ? AND state = 'failed'", (job_id,)).fetchone()[0]
             result_status = "partial" if skipped or review else result.get("result_status", "succeeded")
             self._update_job(job_id, state="succeeded", phase="complete", result_status=result_status, message=("Partial ingestion complete; review the report." if result_status == "partial" else "Ingestion complete"), ingested_questions=accepted, accepted_questions=accepted, review_questions=review, skipped_chunks=skipped, retryable_chunks=skipped, finished=True)
+            from app.services.source_material import map_attachment
+            with get_connection() as connection:
+                attachments = [row[0] for row in connection.execute("SELECT id FROM source_attachments WHERE job_id = ?", (job_id,))]
+            for attachment_id in attachments:
+                map_attachment(job_id, attachment_id)
             emit_event(job_id=job_id, paper_id=None, operation="ingestion", phase="job", outcome="succeeded")
         except asyncio.CancelledError:
             # cancel_job/pause_job has already persisted the requested state.
@@ -539,7 +605,7 @@ class QuestionIngestionService:
                 content=content,
                 source_text=source_text,
                 use_vision=settings.classification_use_vision,
-                include_diagram_pages=bool(settings.diagram_analysis_model),
+                include_diagram_pages=bool(settings.diagram_analysis_model) or bool(content),
             )
         finally:
             _CANCELLATION_SIGNAL.reset(token)
@@ -582,6 +648,8 @@ class QuestionIngestionService:
         # CLASSIFICATION_FALLBACK_MODEL. Generation/validation models stay separate.
         client = OpenRouterClient(settings)
         collection_id = f"ingested-{job_id[:12]}" if job_id else f"ingested-{uuid.uuid4().hex[:12]}"
+        source_header = source.name + "\n" + "\n".join(text[:2000] for _, text in source.pages)
+        source_is_advanced = bool(re.search(r"\bJEE\s+Advanced\b", source_header, re.I))
         normalized: list[dict] = []
         review_questions = 0
         skipped_chunks = 0
@@ -648,7 +716,22 @@ class QuestionIngestionService:
             for question in classified.questions:
                 index = len(normalized) + 1
                 record = question.model_dump()
+                if source_is_advanced and not record.get("exam_format"):
+                    record["exam_format"] = {"version": 1, "exam": "JEE Advanced", "subject": question.subject}
+                elif source_is_advanced and str(record["exam_format"].get("exam", "")).lower() != "jee advanced":
+                    record["format_uncertain"] = True
                 quality_note = None
+                spec = question.response_spec or legacy_response_spec(question.question_type.value, len(question.options))
+                source_exam = str((record.get("exam_format") or {}).get("exam", "")).lower()
+                source_paper = str((record.get("exam_format") or {}).get("paper", "")).lower()
+                if not question.response_spec and source_exam == "jee main" and source_paper in {"paper 1", "paper 1 (b.e./b.tech)", "b.e./b.tech"} and question.question_type.value == "numerical":
+                    spec.numeric = NumericRule(integer_only=True, permitted_precision=0, rounding_rule="nearest")
+                spec.supported_for_generation = generator_compatible(spec, question.question_type.value, len(question.options))
+                # Advanced formats are paper-specific. Missing section rules
+                # remain review candidates instead of receiving a guessed rule.
+                quality_note = format_review_reason(record, spec)
+                if question.correct_answer is not None and not validate_answer(spec, question.correct_answer, len(question.options)):
+                    quality_note = "Source answer does not fit the response rule."
                 if len(str(record.get("stem", "")).strip()) < 12 or re.search(r"\b(unreadable|illegible|\?\?\?)\b", str(record.get("stem", "")), re.IGNORECASE):
                     quality_note = "Transcription is ambiguous or too short for automatic promotion."
                 if job_id:
@@ -661,13 +744,18 @@ class QuestionIngestionService:
                 record.update({
                     "source_key": f"{collection_id}-q{index:04d}",
                     "source_reference": f"{source.name} - page {question.source_page or 'not stated'}, question {question.source_question_number}",
-                    "question_json": {"stem": question.stem, "options": question.options},
+                    "question_json": {"stem": rendered_stem(question.stem, spec, question.question_group), "options": question.options},
                     "answer_json": {"correct_answer": question.correct_answer} if question.correct_answer else None,
                     "source": source.name,
                     "verification_status": "pending_review",
-                    "_diagram_page": question.source_page,
+                    "source_job_id": job_id,
+                    "response_spec": spec.model_dump(),
+                    "answer_provenance": "source" if question.correct_answer else None,
+                    "solution_provenance": "source" if question.solution else None,
+                    "_diagram_page": question.source_page or (1 if Path(source.name).suffix.lower() == ".docx" else None),
+                    "_option_diagrams": question.option_diagrams,
                 })
-                for key in ("stem", "options", "correct_answer", "source_question_number", "source_page"):
+                for key in ("stem", "options", "correct_answer", "source_page", "format_uncertain", "option_diagrams"):
                     record.pop(key, None)
                 normalized.append(record)
                 chunk_normalized.append(record)
@@ -677,6 +765,11 @@ class QuestionIngestionService:
                 inserted_chunk, updated_chunk = upsert_questions(chunk_normalized)
                 inserted_total += inserted_chunk
                 updated_total += updated_chunk
+                if job_id:
+                    with get_connection() as connection:
+                        for record in chunk_normalized:
+                            saved = connection.execute("SELECT id FROM questions WHERE source_key = ?", (record["source_key"],)).fetchone()
+                            connection.execute("UPDATE ingestion_candidates SET promoted_question_id = ? WHERE job_id = ? AND source_question_number = ? AND promoted_question_id IS NULL AND status = 'accepted'", (saved["id"], job_id, record["source_question_number"]))
                 # Assets are saved only after the seed record is durable. A
                 # malformed crop is non-fatal: the text question remains usable.
                 for record in chunk_normalized:
@@ -685,10 +778,19 @@ class QuestionIngestionService:
                     description = record.pop("diagram_description", None)
                     render_spec = record.pop("diagram_render_spec", None)
                     page = record.pop("_diagram_page", None)
-                    if not required or not bbox or not description or not page_images.get(page):
-                        continue
+                    option_diagrams = record.pop("_option_diagrams", {})
                     with get_connection() as connection:
                         stored = connection.execute("SELECT id FROM questions WHERE source_key = ?", (record["source_key"],)).fetchone()
+                    if stored and page_images.get(page):
+                        for option_index, option_bbox in option_diagrams.items():
+                            try:
+                                cropped = crop_normalized_page(page_images[page], option_bbox)
+                                store_diagram(owner_column="seed_question_id", owner_id=stored["id"], provenance="source_crop", data=cropped,
+                                              description=f"Option {int(option_index) + 1} visual", source_page=page, option_index=int(option_index))
+                            except (ValueError, OSError):
+                                pass
+                    if not required or not bbox or not description or not page_images.get(page):
+                        continue
                     if not stored:
                         continue
                     try:
