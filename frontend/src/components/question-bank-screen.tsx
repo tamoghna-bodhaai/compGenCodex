@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { availability, DIFFICULTIES, QUESTION_TYPES } from "@/lib/logic";
-import type { BankSelection, CatalogRow, IngestionReport } from "@/lib/types";
+import type { BankSelection, CatalogRow, IngestionJob, IngestionReport } from "@/lib/types";
 import { useWorkspace } from "@/context/workspace-context";
 import { Dialog } from "@/components/dialog";
 import { QuestionBrowserDialog } from "@/components/question-browser-dialog";
@@ -13,8 +13,8 @@ import s from "@/styles/ui.module.css";
 
 function unique<T>(items: T[], key: (item: T) => string) { return [...new Map(items.map((item) => [key(item), item])).values()]; }
 
-export function QuestionBankScreen() {
-  const { ingestionJobs, setIngestionJob, refresh, toast } = useWorkspace();
+export function QuestionBankScreen({ view = "bank" }: { view?: "bank" | "ingestion" }) {
+  const { ingestionJobs, loading: workspaceLoading, error: workspaceError, setIngestionJob, refresh, toast } = useWorkspace();
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [selection, setSelection] = useState<BankSelection>({});
   const [bankFilter, setBankFilter] = useState<BankSelection>({});
@@ -33,10 +33,12 @@ export function QuestionBankScreen() {
   useEffect(() => { void loadCatalog(); return () => catalogRequest.current?.abort(); }, [loadCatalog]);
 
   const openBranch = (next: BankSelection) => { setSelection({ ...bankFilter, ...next }); setBrowserOpen(true); };
-  const latestIngestionJob = ingestionJobs[0] || null;
+  const activeJobs = ingestionJobs.filter((job) => ["queued", "running"].includes(job.state));
+  const reviewCount = ingestionJobs.reduce((total, job) => total + (job.review_questions || 0), 0);
   useEffect(() => { if (!reviewJobId) { setReport(null); return; } let active = true; api.ingestionReport(reviewJobId).then((data) => { if (active) setReport(data); }).catch((caught) => toast(caught instanceof Error ? caught.message : "Couldn’t load review.", "error")); return () => { active = false; }; }, [reviewJobId, ingestionJobs, toast]);
   useEffect(() => { if (!solutionJobId) return; const timer = window.setInterval(() => { void api.bankSolutionJob(solutionJobId).then((job) => { if (["succeeded", "failed"].includes(job.state)) { window.clearInterval(timer); setSolutionJobId(null); toast(job.state === "succeeded" ? `Generated ${job.completed_questions} solutions.` : job.error_message || "Solution generation needs review.", job.state === "succeeded" ? undefined : "error"); if (reviewJobId) void api.ingestionReport(reviewJobId).then(setReport); } }); }, 2500); return () => window.clearInterval(timer); }, [solutionJobId, reviewJobId, toast]);
-  useEffect(() => { if (latestIngestionJob?.state === "succeeded") void loadCatalog(); }, [latestIngestionJob?.id, latestIngestionJob?.state, loadCatalog]);
+  const completedJobIds = ingestionJobs.filter((job) => job.state === "succeeded").map((job) => job.id).join(",");
+  useEffect(() => { if (completedJobIds) void loadCatalog(); }, [completedJobIds, loadCatalog]);
 
   const collectionTotal = availability(catalog);
   const branches = useMemo(() => {
@@ -56,16 +58,15 @@ export function QuestionBankScreen() {
       const result = await api.ingest(values);
       setIngestionJob(result.job);
       setIngestionOpen(false);
-      toast("Ingestion accepted. You can follow its live progress below or on the dashboard.");
+      toast("Ingestion accepted. Track its progress here or on the dashboard.");
     }
     catch (caught) { toast(caught instanceof Error ? caught.message : "Ingestion failed.", "error"); }
     finally { setSubmitting(false); }
   }
-  async function controlIngestion(action: "pause" | "resume" | "cancel") {
-    if (!latestIngestionJob) return;
+  async function controlIngestion(job: IngestionJob, action: "pause" | "resume" | "cancel") {
     try {
       if (action === "cancel" && !window.confirm("Cancel this ingestion? Accepted questions and the report will be retained.")) return;
-      const result = action === "pause" ? await api.pauseIngestion(latestIngestionJob.id) : action === "resume" ? await api.resumeIngestion(latestIngestionJob.id) : await api.cancelIngestion(latestIngestionJob.id);
+      const result = action === "pause" ? await api.pauseIngestion(job.id) : action === "resume" ? await api.resumeIngestion(job.id) : await api.cancelIngestion(job.id);
       setIngestionJob(result.job);
       toast(action === "pause" ? "Ingestion paused." : action === "resume" ? "Ingestion resumed." : "Ingestion cancelled; completed work was retained.");
     } catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t update ingestion.", "error"); }
@@ -81,15 +82,54 @@ export function QuestionBankScreen() {
     catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t delete source.", "error"); }
   }
 
-  if (loading) return <section className={s.content}><EmptyState title="Loading the question bank" description="Reading the classified seed catalog…" /></section>;
+  if (view === "bank" && loading) return <section className={s.content}><EmptyState title="Loading the question bank" description="Reading the classified seed catalog…" /></section>;
+  if (view === "ingestion" && workspaceLoading) return <section className={s.content}><EmptyState title="Loading sources" description="Checking ingestion activity…" /></section>;
   return <section className={`${s.content} ${s.bankContent}`}>
-    <PageHeader eyebrow="Question bank" title="Classified seed library" description="Open a taxonomy branch to inspect its questions, labels, and source metadata." actions={<><Link className={`${s.button} ${s.button_default}`} href="/new-paper">Create paper</Link><Button tone="primary" icon="plus" onClick={() => setIngestionOpen(true)}>Ingest questions</Button></>} />
-    {!!ingestionJobs.length && <section className={s.panel} aria-labelledby="ingestion-activity-heading"><div className={s.sectionHead}><div><span className={s.eyebrow}>Ingestion activity</span><h2 id="ingestion-activity-heading">Source history</h2></div></div>{ingestionJobs.map((job) => <div key={job.id} className={s.detailBody}><div className={s.chipRow}><strong>{job.source_name}</strong><span className={s.chip}>{job.state}</span><span>{job.accepted_questions || 0} accepted · {job.review_questions || 0} review needed</span><Button size="small" onClick={() => setReviewJobId(job.id)}>Review</Button>{!["queued", "running"].includes(job.state) && <Button size="small" onClick={() => void removeSource(job.id)}>Delete source</Button>}</div>{job.id === latestIngestionJob?.id && ["queued", "running"].includes(job.state) && <IngestionProgress job={job} onPause={job.control_state !== "paused" ? () => void controlIngestion("pause") : undefined} onResume={job.control_state === "paused" ? () => void controlIngestion("resume") : undefined} onCancel={() => void controlIngestion("cancel")} />}</div>)}</section>}
-    {error ? <EmptyState title="Couldn’t load the question bank" description={error} action={<Button onClick={() => void loadCatalog()}>Retry</Button>} /> : collectionTotal ? <>
-      <section className={s.panel}><div className={s.chipRow}><label>Source <select className={s.input} value={bankFilter.source_job_id || ""} onChange={(event) => setBankFilter((current) => ({ ...current, source_job_id: event.target.value || undefined }))}><option value="">All sources</option>{ingestionJobs.map((job) => <option key={job.id} value={job.id}>{job.source_name}</option>)}</select></label><label>Response <select className={s.input} value={bankFilter.response_mode || ""} onChange={(event) => setBankFilter((current) => ({ ...current, response_mode: event.target.value || undefined }))}><option value="">All formats</option>{["select", "numeric", "matching", "subjective", "unknown"].map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label><label>Review <select className={s.input} value={bankFilter.verification_status || ""} onChange={(event) => setBankFilter((current) => ({ ...current, verification_status: event.target.value || undefined }))}><option value="">All states</option><option value="pending_review">Pending review</option><option value="accepted">Accepted</option></select></label><label>Paper <input className={s.input} value={bankFilter.paper || ""} onChange={(event) => setBankFilter((current) => ({ ...current, paper: event.target.value || undefined }))} /></label><label>Section <input className={s.input} value={bankFilter.section || ""} onChange={(event) => setBankFilter((current) => ({ ...current, section: event.target.value || undefined }))} /></label><Button size="small" onClick={() => openBranch({})}>Browse filtered questions</Button></div></section>
+    {view === "bank" ? <>
+      <PageHeader eyebrow="Question bank" title="Browse questions" description="Explore classified questions by subject and topic, or use filters to find a specific set." actions={<><Link className={`${s.button} ${s.button_default}`} href="/new-paper">Create paper</Link><Link className={`${s.button} ${s.button_primary}`} href="/ingestion">Ingest questions</Link></>} />
+      {error ? <EmptyState title="Couldn’t load the question bank" description={error} action={<Button onClick={() => void loadCatalog()}>Retry</Button>} /> : collectionTotal ? <>
+      <section className={s.bankFilters}><div className={s.bankFiltersHead}><div><span className={s.eyebrow}>Find questions</span><h2>Filter the library</h2></div><span>Choose filters, then open matching questions</span></div><div className={s.bankFilterGrid}><label>Source <select className={s.input} value={bankFilter.source_job_id || ""} onChange={(event) => setBankFilter((current) => ({ ...current, source_job_id: event.target.value || undefined }))}><option value="">All sources</option>{ingestionJobs.map((job) => <option key={job.id} value={job.id}>{job.source_name}</option>)}</select></label><label>Response <select className={s.input} value={bankFilter.response_mode || ""} onChange={(event) => setBankFilter((current) => ({ ...current, response_mode: event.target.value || undefined }))}><option value="">All formats</option>{["select", "numeric", "matching", "subjective", "unknown"].map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label><label>Review <select className={s.input} value={bankFilter.verification_status || ""} onChange={(event) => setBankFilter((current) => ({ ...current, verification_status: event.target.value || undefined }))}><option value="">All states</option><option value="pending_review">Pending review</option><option value="accepted">Accepted</option></select></label><label>Paper <input className={s.input} value={bankFilter.paper || ""} onChange={(event) => setBankFilter((current) => ({ ...current, paper: event.target.value || undefined }))} /></label><label>Section <input className={s.input} value={bankFilter.section || ""} onChange={(event) => setBankFilter((current) => ({ ...current, section: event.target.value || undefined }))} /></label><Button onClick={() => openBranch({})}>Browse matches</Button></div></section>
       <section className={s.bankSummary}><div><span className={s.eyebrow}>Current collection</span><h2>All classified questions</h2><p>{collectionTotal} seed questions · open any branch to read questions without leaving the taxonomy.</p></div><div className={s.chipRow}>{QUESTION_TYPES.map(([type, label]) => <span className={s.chip} key={type}>{label}: {availability(catalog.filter((row) => row.question_type === type))}</span>)}{DIFFICULTIES.map(([key, label, representative]) => <span className={s.chip} key={key}>{label}: {availability(catalog.filter((row) => representative === 1 ? row.difficulty <= 2 : representative === 3 ? row.difficulty === 3 : row.difficulty >= 4))}</span>)}</div></section>
-      <section className={s.taxonomyTree} aria-label="Question taxonomy">{branches.map((exam) => <article className={s.taxonomyExam} key={exam.exam}><button className={s.taxonomyHeading} onClick={() => openBranch({ exam: exam.exam })}><span>{exam.exam}</span><strong>{exam.count}</strong></button><div>{exam.subjects.map((subject) => <section className={s.taxonomySubject} key={subject.subject}><button className={s.taxonomyHeading} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject })}><span>{subject.subject}</span><strong>{subject.count}</strong></button><div>{subject.chapters.map((chapter) => <div className={s.taxonomyChapter} key={chapter.chapter}><button className={s.taxonomyHeading} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter })}><span>{chapter.chapter || "Unclassified chapter"}</span><strong>{chapter.count}</strong></button><div className={s.taxonomyTopics}>{chapter.topics.map((topic) => <section className={s.taxonomyTopic} key={topic.topic}><button className={s.taxonomyHeading} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter, topic: topic.topic })}><span>{topic.topic || "Unclassified topic"}</span><strong>{topic.count}</strong></button>{topic.topicOnlyCount > 0 && <button className={s.taxonomyLeaf} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter, topic: topic.topic })}><span>Questions filed directly in this topic</span><strong>{topic.topicOnlyCount}</strong></button>}<div className={s.taxonomyLeaves}>{topic.subtopics.map((subtopic) => <button className={s.taxonomyLeaf} key={subtopic.subtopic} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter, topic: topic.topic, subtopic: subtopic.subtopic })}><span>{subtopic.subtopic}</span><strong>{subtopic.count}</strong></button>)}</div></section>)}</div></div>)}</div></section>)}</div></article>)}</section>
-    </> : <section className={s.panel}><EmptyState title="No classified seed questions yet" description="Upload a PDF or DOCX, or paste question text. The classifier will create reviewable taxonomy-labeled seed questions." action={<Button tone="primary" onClick={() => setIngestionOpen(true)}>Ingest questions</Button>} /></section>}
+      <section className={s.taxonomyTree} aria-label="Question taxonomy">
+        <div className={s.taxonomyIntro}><div><span className={s.eyebrow}>Explore</span><h2>Browse by taxonomy</h2></div><p>Expand a branch to find its topics and questions.</p></div>
+        {branches.map((exam, examIndex) => <details className={s.taxonomyExam} key={exam.exam} open={examIndex === 0}>
+          <summary className={s.taxonomyHeading}><span>{exam.exam}</span><strong>{exam.count}</strong></summary>
+          <div className={s.taxonomyInner}><Button size="small" onClick={() => openBranch({ exam: exam.exam })}>Browse all {exam.exam} questions</Button>
+            {exam.subjects.map((subject) => <details className={s.taxonomySubject} key={subject.subject}>
+              <summary className={s.taxonomyHeading}><span>{subject.subject}</span><strong>{subject.count}</strong></summary>
+              <div className={s.taxonomyInner}><Button size="small" onClick={() => openBranch({ exam: exam.exam, subject: subject.subject })}>Browse {subject.subject}</Button>
+                {subject.chapters.map((chapter) => <details className={s.taxonomyChapter} key={chapter.chapter}>
+                  <summary className={s.taxonomyHeading}><span>{chapter.chapter || "Unclassified chapter"}</span><strong>{chapter.count}</strong></summary>
+                  <div className={s.taxonomyInner}><Button size="small" onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter })}>Browse chapter</Button>
+                    {chapter.topics.map((topic) => <div className={s.taxonomyTopic} key={topic.topic}>
+                      <button className={s.taxonomyHeading} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter, topic: topic.topic })}><span>{topic.topic || "Unclassified topic"}</span><strong>{topic.count}</strong></button>
+                      {topic.topicOnlyCount > 0 && <button className={s.taxonomyLeaf} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter, topic: topic.topic })}><span>Questions filed directly in this topic</span><strong>{topic.topicOnlyCount}</strong></button>}
+                      <div className={s.taxonomyLeaves}>{topic.subtopics.map((subtopic) => <button className={s.taxonomyLeaf} key={subtopic.subtopic} onClick={() => openBranch({ exam: exam.exam, subject: subject.subject, chapter: chapter.chapter, topic: topic.topic, subtopic: subtopic.subtopic })}><span>{subtopic.subtopic}</span><strong>{subtopic.count}</strong></button>)}</div>
+                    </div>)}
+                  </div>
+                </details>)}
+              </div>
+            </details>)}
+          </div>
+        </details>)}
+      </section>
+    </> : <section className={s.panel}><EmptyState title="No classified seed questions yet" description="Upload a PDF or DOCX, or paste question text. The classifier will create reviewable taxonomy-labeled seed questions." action={<Link className={`${s.button} ${s.button_primary}`} href="/ingestion">Ingest questions</Link>} /></section>}
+    </> : <>
+      <PageHeader eyebrow="Ingestion" title="Source ingestion" description="Upload question sets, follow processing, and review the questions created from each source." actions={<Button tone="primary" icon="plus" onClick={() => setIngestionOpen(true)}>Ingest questions</Button>} />
+      <div className={s.ingestionOverview}>
+        <div><span>Sources</span><strong>{ingestionJobs.length}</strong></div>
+        <div><span>In progress</span><strong>{activeJobs.length}</strong></div>
+        <div><span>Needs review</span><strong>{reviewCount}</strong></div>
+      </div>
+      {workspaceError && !ingestionJobs.length ? <section className={s.sourcePanel}><EmptyState title="Couldn’t load sources" description={workspaceError} action={<Button onClick={() => void refresh()}>Retry</Button>} /></section> : ingestionJobs.length ? <section className={s.sourcePanel} aria-labelledby="source-history-heading">
+        <div className={s.sourcePanelHead}><div><span className={s.eyebrow}>Ingestion activity</span><h2 id="source-history-heading">Source history</h2><p>Processing progress and review tools for every uploaded source.</p></div></div>
+        <div className={s.sourceList}>{ingestionJobs.map((job) => <article key={job.id} className={s.sourceRow}>
+          <div className={s.sourceMain}><div className={s.sourceName}><strong title={job.source_name}>{job.source_name}</strong><span className={`${s.sourceStatus} ${job.state === "failed" ? s.sourceStatusFailed : ["queued", "running"].includes(job.state) ? s.sourceStatusActive : job.state === "succeeded" ? s.sourceStatusSuccess : ""}`}>{job.state}</span></div><p>{job.accepted_questions || 0} accepted <span aria-hidden="true">·</span> {job.review_questions || 0} need review</p>{job.error_message && <p className={s.errorText} role="alert">{job.error_message}</p>}</div>
+          <div className={s.sourceActions}><Button onClick={() => setReviewJobId(job.id)}>Review source</Button>{!["queued", "running"].includes(job.state) && <Button tone="quiet" onClick={() => void removeSource(job.id)}>Delete</Button>}</div>
+          {["queued", "running"].includes(job.state) && <div className={s.sourceProgress}><IngestionProgress job={job} onPause={job.control_state !== "paused" ? () => void controlIngestion(job, "pause") : undefined} onResume={job.control_state === "paused" ? () => void controlIngestion(job, "resume") : undefined} onCancel={() => void controlIngestion(job, "cancel")} /></div>}
+        </article>)}</div>
+      </section> : <section className={s.sourcePanel}><EmptyState title="No sources ingested yet" description="Upload a PDF or DOCX, or paste question text to build your classified question library." action={<Button tone="primary" onClick={() => setIngestionOpen(true)}>Ingest questions</Button>} /></section>}
+    </>}
 
     <QuestionBrowserDialog open={browserOpen} selection={selection} title="Questions in this branch" onClose={() => setBrowserOpen(false)} />
     <Dialog open={!!reviewJobId} wide title="Source review" subtitle={report?.job.source_name || "Loading…"} onClose={() => setReviewJobId(null)}><div className={s.modalBody}>{report && <div className={s.detailBody}>

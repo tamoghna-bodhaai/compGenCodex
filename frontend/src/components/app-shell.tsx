@@ -11,6 +11,7 @@ import s from "@/styles/ui.module.css";
 const nav = [
   { href: "/", label: "Dashboard", icon: "dashboard" as const },
   { href: "/question-bank", label: "Question bank", icon: "library" as const },
+  { href: "/ingestion", label: "Ingestion", icon: "download" as const },
   { href: "/branding", label: "Branding", icon: "branding" as const },
   { href: "/archive", label: "Export archive", icon: "archive" as const },
 ];
@@ -19,7 +20,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   if (pathname === "/login") return <>{children}</>;
-  const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
+  const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/ingestion" ? "Ingestion" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
   const signOut = async () => {
     try {
       await api.logout();

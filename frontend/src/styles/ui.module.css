@@ -427,3 +427,59 @@
   .exportControls > * { flex: 1 1 120px; max-width: none !important; }
   .staleNotice { align-items: flex-start; flex-direction: column; }
 }
+
+/* Question bank and source ingestion */
+.bankFilters, .sourcePanel { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.bankFilters { margin-bottom: 14px; }
+.bankFiltersHead, .sourcePanelHead { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 17px 18px 13px; }
+.bankFiltersHead h2, .sourcePanelHead h2 { margin: 4px 0 0; font-size: 16px; letter-spacing: -.02em; }
+.bankFiltersHead > span, .sourcePanelHead p { margin: 0; color: var(--muted); font-size: 11px; }
+.bankFilterGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 12px; border-top: 1px solid var(--line); padding: 16px 18px 18px; }
+.bankFilterGrid label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 650; }
+.bankFilterGrid .button { min-height: 37px; }
+.ingestionOverview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.ingestionOverview > div { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 17px 18px; }
+.ingestionOverview span { color: var(--muted); font-size: 11px; font-weight: 650; }
+.ingestionOverview strong { color: var(--ink); font-size: 26px; letter-spacing: -.04em; line-height: 1; }
+.sourcePanelHead { border-bottom: 1px solid var(--line); padding: 20px; }
+.sourcePanelHead p { margin-top: 5px; }
+.sourceList { display: grid; }
+.sourceRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 20px; padding: 17px 20px; }
+.sourceRow + .sourceRow { border-top: 1px solid var(--line); }
+.sourceMain { display: grid; min-width: 0; gap: 7px; }
+.sourceName { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.sourceName strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.sourceMain p { margin: 0; color: var(--muted); font-size: 11px; }
+.sourceMain p span { padding: 0 4px; }
+.sourceStatus { flex: 0 0 auto; border-radius: 999px; background: var(--canvas); color: var(--muted); padding: 4px 8px; font-size: 10px; font-weight: 700; text-transform: capitalize; }
+.sourceStatusActive { background: var(--accent-soft); color: var(--accent); }
+.sourceStatusSuccess { background: var(--success-soft); color: var(--success); }
+.sourceStatusFailed { background: var(--danger-soft); color: var(--danger); }
+.sourceActions { display: flex; align-items: center; gap: 7px; }
+.sourceProgress { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 3px; }
+@media (max-width: 700px) {
+  .bankFiltersHead { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .bankFilterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sourceRow { grid-template-columns: 1fr; }
+  .sourceActions { justify-content: flex-start; }
+}
+@media (max-width: 560px) {
+  .bankFilterGrid, .ingestionOverview { grid-template-columns: 1fr; }
+  .sourceName { align-items: flex-start; flex-direction: column; gap: 6px; }
+}
+.taxonomyIntro { display: flex; align-items: end; justify-content: space-between; gap: 12px; padding: 7px 7px 13px; }
+.taxonomyIntro h2 { margin: 4px 0 0; font-size: 16px; letter-spacing: -.02em; }
+.taxonomyIntro p { margin: 0; color: var(--muted); font-size: 11px; }
+.taxonomyTree { gap: 8px; }
+.taxonomyExam > summary.taxonomyHeading, .taxonomySubject > summary.taxonomyHeading, .taxonomyChapter > summary.taxonomyHeading { min-height: 40px; justify-content: flex-start; gap: 10px; cursor: pointer; list-style: none; }
+.taxonomyExam > summary.taxonomyHeading::-webkit-details-marker, .taxonomySubject > summary.taxonomyHeading::-webkit-details-marker, .taxonomyChapter > summary.taxonomyHeading::-webkit-details-marker { display: none; }
+.taxonomyExam > summary.taxonomyHeading::before, .taxonomySubject > summary.taxonomyHeading::before, .taxonomyChapter > summary.taxonomyHeading::before { content: '›'; width: 12px; color: var(--muted); font-size: 18px; font-weight: 400; line-height: 1; transition: transform .15s ease; }
+.taxonomyExam[open] > summary.taxonomyHeading::before, .taxonomySubject[open] > summary.taxonomyHeading::before, .taxonomyChapter[open] > summary.taxonomyHeading::before { transform: rotate(90deg); }
+.taxonomyExam > summary.taxonomyHeading strong, .taxonomySubject > summary.taxonomyHeading strong, .taxonomyChapter > summary.taxonomyHeading strong { margin-left: auto; }
+.taxonomyInner { display: grid; justify-items: start; gap: 9px; padding: 12px; }
+.taxonomyInner > .taxonomySubject, .taxonomyInner > .taxonomyChapter, .taxonomyInner > .taxonomyTopic { width: 100%; margin: 0; }
+.taxonomyChapter { padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.taxonomyChapter > summary.taxonomyHeading { padding: 7px 10px; }
+.taxonomyTopic { border-left-color: var(--accent-soft); }
+.taxonomyHeading:focus-visible, .taxonomyLeaf:focus-visible, .button:focus-visible, .navLink:focus-visible, .mobileNav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 560px) { .taxonomyIntro { align-items: flex-start; flex-direction: column; } }
