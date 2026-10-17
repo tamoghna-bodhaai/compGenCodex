@@ -23,6 +23,7 @@ from app.db.database import database_path
 from app.services.diagrams import asset_path, get_diagram
 from app.services.assessment import finalize_expired, iso, parse_time, score_version, snapshot_item, utc_now
 from app.schemas.assessment import ResponseSpec, validate_answer
+from app.services.assessment_templates import apply_template_rules, assessment_template, assessment_templates as template_descriptors, validate_template_counts
 from app.services.papers import PaperService, PaperNotFoundError
 
 router = APIRouter(prefix="/api/assessments", tags=["assessments"])
@@ -170,8 +171,10 @@ class PublishTest(BaseModel):
     def check(self):
         if self.opens_at and self.closes_at and self.closes_at <= self.opens_at:
             raise ValueError("Closing time must follow opening time")
-        if self.template == "jee_main_2026_paper1" and self.duration_minutes != 180:
-            raise ValueError("JEE Main 2026 Paper 1 requires 180 minutes")
+        if self.template:
+            template = assessment_template(self.template)
+            if self.duration_minutes != template["duration_minutes"]:
+                raise ValueError(f"{template['name']} requires {template['duration_minutes']} minutes")
         if self.results_policy.get("mode") not in {"immediate", "scheduled"}:
             raise ValueError("Result release mode must be immediate or scheduled")
         if self.results_policy.get("mode") == "scheduled" and not self.results_policy.get("release_at"):
@@ -196,6 +199,12 @@ def paper_cbt_settings(paper: dict) -> tuple[int | None, float | None]:
     )
 
 
+@router.get("/templates")
+def list_assessment_templates(request: Request) -> dict:
+    actor(request, "admin", "teacher")
+    return {"items": template_descriptors()}
+
+
 @router.post("/papers/{paper_id}/publish", status_code=201)
 def publish_paper(paper_id: str, payload: PublishTest, request: Request) -> dict:
     user = actor(request, "admin", "teacher")
@@ -216,24 +225,8 @@ def publish_paper(paper_id: str, payload: PublishTest, request: Request) -> dict
             metadata = question.get("generation_metadata") or {}
             exam_format = metadata.get("exam_format") or {}
             subject = str(exam_format.get("subject") or paper["subject"])
-            if payload.template == "jee_main_2026_paper1":
-                kind = question["question_type"]
-                if subject not in {"Physics", "Chemistry", "Mathematics"} or kind not in {"single_correct_mcq", "numerical"}:
-                    raise ValueError("JEE Main Paper 1 requires Physics, Chemistry, or Mathematics single-choice or numerical questions")
-                spec = ResponseSpec.model_validate(metadata.get("response_spec") or {"mode":"numeric" if kind == "numerical" else "select", "min_selections":1 if kind != "numerical" else None, "max_selections":1 if kind != "numerical" else None})
-                if kind == "single_correct_mcq" and (spec.mode != "select" or len(question["question_json"].get("options") or []) != 4 or spec.max_selections not in {None, 1}):
-                    raise ValueError("JEE Main MCQs need four options and one answer")
-                if kind == "single_correct_mcq":
-                    spec.min_selections = spec.max_selections = 1
-                if kind == "numerical":
-                    if spec.mode != "numeric": raise ValueError("JEE Main numerical questions need a numeric response")
-                    from app.schemas.assessment import NumericRule
-                    spec.numeric = NumericRule(integer_only=True)
-                spec.marking.full, spec.marking.negative, spec.marking.zero = 4, -1, 0
-                spec.marking.partial = {}
-                metadata["response_spec"] = spec.model_dump()
-                metadata["exam_format"] = {**exam_format, "exam":"JEE Main", "year":2026, "paper":"Paper 1", "subject":subject}
-                question["generation_metadata"] = metadata
+            if payload.template:
+                subject, kind = apply_template_rules(payload.template, question, paper["subject"])
                 template_counts[(subject, kind)] += 1
             item = snapshot_item(question, sections.get(question["section_id"]),paper["exam"])
             item["subject"] = subject
@@ -248,8 +241,11 @@ def publish_paper(paper_id: str, payload: PublishTest, request: Request) -> dict
         errors.append({"position": 0, "question_id": "paper-settings", "reason": f"Question marks total {snapshot_total:g}, but this paper is set to {paper_total_marks:g} marks. Update question marks or paper marks before publishing."})
     if errors:
         raise HTTPException(422, {"message": "Fix questions before publishing", "questions": errors})
-    if payload.template == "jee_main_2026_paper1" and any(template_counts[(subject, kind)] != expected for subject in ("Mathematics", "Physics", "Chemistry") for kind, expected in (("single_correct_mcq",20), ("numerical",5))):
-        raise HTTPException(422, "JEE Main 2026 Paper 1 needs exactly 20 single-choice and 5 numerical questions in each of Mathematics, Physics, and Chemistry.")
+    if payload.template:
+        try:
+            validate_template_counts(payload.template, template_counts)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
     now, test_id, version_id = iso(utc_now()), str(uuid.uuid4()), str(uuid.uuid4())
     with get_connection() as connection:
         test = connection.execute("SELECT * FROM tests WHERE paper_id=?", (paper_id,)).fetchone()

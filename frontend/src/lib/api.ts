@@ -10,7 +10,7 @@ import type {
   SeedQuestion,
   SeedComparison,
   PaperExport,
-  PaperComparison,
+  PaperComparison, AssessmentTemplate,
   SessionAccount, TeacherAccount, Classroom, CbtTest, CbtAttempt, CbtQuestion,
 } from "@/lib/types";
 
@@ -74,6 +74,7 @@ export const api = {
   banks: () => apiRequest<{ items: GlobalBank[] }>("/banks"),
   bankReadiness: (id: string) => apiRequest<{ total: number; ready: number; blocked: Array<{ question_id: string; source_reference: string | null; reason: string }> }>(`/banks/${id}/readiness`),
   assessmentHealth: () => apiRequest<{ database: string; active_attempts: number; failed_generation_jobs: number; recent_events: Array<{ action: string; resource_id: string; created_at: string }> }>("/assessments/admin/health"),
+  assessmentTemplates: () => apiRequest<{ items: AssessmentTemplate[] }>("/assessments/templates"),
   createBank: (name: string) => apiRequest<{ id: string }>("/banks", { method: "POST", body: JSON.stringify({ name }) }),
   publishBank: (id: string, body: unknown) => apiRequest<{ published_count: number; missing_answer_count: number }>(`/banks/${id}/publish`, { method: "POST", body: JSON.stringify(body) }),
   classes: () => apiRequest<{ items: Classroom[] }>("/assessments/classes"),

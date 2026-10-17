@@ -10,7 +10,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from tests import test_paper_service, test_test_engine
-from app.api.assessments import AccommodationUpdate, AssignmentUpdate, LinkTest, PublishTest, ResponseIn, create_class, add_student, publish_paper, update_assignments, update_accommodation, start_attempt, save_response, submit_attempt, get_attempt, student_tests, result, link_test, ClassroomCreate
+from app.api.assessments import AccommodationUpdate, AssignmentUpdate, LinkTest, PublishTest, ResponseIn, create_class, add_student, publish_paper, update_assignments, update_accommodation, start_attempt, save_response, submit_attempt, get_attempt, student_tests, result, link_test, list_assessment_templates, ClassroomCreate
 from app.api.auth import AccountCreate, create_teacher
 from app.core.auth import current_user_context
 from app.db.database import get_connection
@@ -144,6 +144,12 @@ class ResultPrivacyTests(unittest.TestCase):
 
     def test_main_2026_template_checks_structure_and_snapshots_rules(self):
         teacher = self.teacher_request.state.user
+        descriptor = list_assessment_templates(self.teacher_request)["items"][0]
+        self.assertEqual(descriptor["id"], "jee_main_2026_paper1")
+        self.assertEqual(descriptor["duration_minutes"], 180)
+        self.assertEqual(descriptor["total_questions"], 75)
+        self.assertEqual([subject["name"] for subject in descriptor["subjects"]], ["Mathematics", "Physics", "Chemistry"])
+        self.assertEqual([section["count"] for section in descriptor["subjects"][0]["sections"]], [20, 5])
         now = datetime.now(UTC).isoformat()
         paper_id = "main-template-paper"
         with get_connection() as connection:
