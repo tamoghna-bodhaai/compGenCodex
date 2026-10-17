@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Icon } from "@/components/icons";
 import { LegacyHashRedirect } from "@/components/legacy-hash-redirect";
@@ -18,11 +18,37 @@ const nav = [
   { href: "/archive", label: "Export archive", icon: "archive" as const },
 ];
 
-function Shell({ children, user }: { children: React.ReactNode; user: SessionAccount }) {
+export function Shell({ children, user }: { children: React.ReactNode; user: SessionAccount }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileMenuButton = useRef<HTMLButtonElement>(null);
+  const mobileNavigation = useRef<HTMLElement>(null);
   useEffect(() => setMobileNavOpen(false), [pathname]);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const triggerElement = mobileMenuButton.current;
+    const navigationElement = mobileNavigation.current;
+    const focusable = () => [...(navigationElement?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") || [])];
+    focusable()[0]?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setMobileNavOpen(false); return; }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0]; const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      triggerElement?.focus();
+    };
+  }, [mobileNavOpen]);
   if (pathname === "/login") return <>{children}</>;
   const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname.startsWith("/tests") ? "Tests" : pathname.startsWith("/student") ? "My tests" : pathname.startsWith("/admin") ? "Admin" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/ingestion" ? "Ingestion" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
   const navigation = user.role === "student" ? [{ href: "/student", label: "My tests", icon: "document" as const }] : [...nav.filter(item => user.role === "admin" || !["/ingestion", "/archive", "/branding"].includes(item.href)), { href: "/tests", label: "Tests & classes", icon: "document" as const }, ...(user.role === "admin" ? [{ href: "/admin", label: "Admin", icon: "library" as const }] : [])];
@@ -45,8 +71,8 @@ function Shell({ children, user }: { children: React.ReactNode; user: SessionAcc
       <div className={s.sidebarFoot}><span>{user.name}</span><small>{user.role === "admin" ? "Super admin" : user.role === "teacher" ? "Teacher" : "Student"}</small></div>
     </aside>
     <main className={s.workspace}>
-      <header className={s.topbar}><button className={s.mobileMenuButton} type="button" aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => setMobileNavOpen((open) => !open)}><Icon name={mobileNavOpen ? "close" : "questions"} /><span className={s.visuallyHidden}>{mobileNavOpen ? "Close navigation" : "Open navigation"}</span></button><div className={s.breadcrumb}><Icon name="document" /><span>Paper Studio</span><Icon name="chevron" /><strong>{routeName}</strong></div><div className={s.topbarActions}>{user.role !== "student" && <Link href="/new-paper" className={s.topbarAction}><Icon name="plus" />New paper</Link>}<button className={s.signOut} type="button" onClick={() => void signOut()}>Sign out</button></div></header>
-      {mobileNavOpen && <><button className={s.mobileNavBackdrop} type="button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} /><nav id="mobile-workspace-navigation" className={s.mobileNav} aria-label="Workspace navigation">{navigation.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} aria-current={active ? "page" : undefined} className={active ? s.mobileActive : ""} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>; })}</nav></>}
+      <header className={s.topbar}><button ref={mobileMenuButton} className={s.mobileMenuButton} type="button" aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => setMobileNavOpen((open) => !open)}><Icon name={mobileNavOpen ? "close" : "questions"} /><span className={s.visuallyHidden}>{mobileNavOpen ? "Close navigation" : "Open navigation"}</span></button><div className={s.breadcrumb}><Icon name="document" /><span>Paper Studio</span><Icon name="chevron" /><strong>{routeName}</strong></div><div className={s.topbarActions}>{user.role !== "student" && <Link href="/new-paper" className={s.topbarAction}><Icon name="plus" />New paper</Link>}<button className={s.signOut} type="button" onClick={() => void signOut()}>Sign out</button></div></header>
+      {mobileNavOpen && <><button className={s.mobileNavBackdrop} type="button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} /><nav ref={mobileNavigation} id="mobile-workspace-navigation" className={s.mobileNav} aria-label="Workspace navigation">{navigation.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} aria-current={active ? "page" : undefined} className={active ? s.mobileActive : ""} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>; })}</nav></>}
       {children}
     </main>
     <LegacyHashRedirect />
