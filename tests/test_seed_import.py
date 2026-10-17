@@ -17,6 +17,7 @@ from app.services.seed_import import (
     upsert_seed_questions,
     validate_question,
 )
+from app.db.database import initialize_database
 
 
 class SeedImportTests(unittest.TestCase):
@@ -24,6 +25,7 @@ class SeedImportTests(unittest.TestCase):
         seed_file = ROOT_DIR / "sample_data" / "jee_definite_integrals_questions.json"
         with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "questions.db"
+            initialize_database(database_path)
             self.assertEqual(upsert_seed_questions(seed_file, database_path), (50, 0))
             self.assertEqual(upsert_seed_questions(seed_file, database_path), (0, 50))
             with sqlite3.connect(database_path) as connection:

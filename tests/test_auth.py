@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import HTTPException, Request, Response
 from app.api.auth import login, logout, session
 from app.core.auth import create_session, credentials_are_valid, get_auth_settings, verify_session
+from app.db.database import initialize_database
 from app.schemas.auth import LoginRequest
 
 
@@ -31,6 +32,7 @@ class AuthenticationTests(unittest.TestCase):
             "AUTH_COOKIE_SECURE": "false",
             "DATABASE_URL": f"sqlite:///{Path(self.database_directory.name) / 'test.db'}",
         })
+        initialize_database()
 
     def tearDown(self) -> None:
         os.environ.clear()

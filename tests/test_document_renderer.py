@@ -8,6 +8,7 @@ from pathlib import Path
 from docx import Document
 
 from app.schemas.generation import DifficultyCount, GenerationMode, QuestionType, QuestionTypeCount, VariationStrength
+from app.db.database import initialize_database
 from app.schemas.papers import AddManualQuestionRequest, ExportFormat, ExportVariant, PaperCreateRequest, PaperUpdateRequest
 from app.services.document_renderer import PaperDocumentRenderer, answer_to_readable, latex_to_readable
 from app.services.papers import PaperService
@@ -18,6 +19,7 @@ class DocumentRendererTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         os.environ["DATABASE_URL"] = f"sqlite:///{Path(self.tmp.name) / 'test.db'}"
+        initialize_database()
         request = PaperCreateRequest(
             title="Definite Integrals Practice Paper",
             exam="JEE Main",

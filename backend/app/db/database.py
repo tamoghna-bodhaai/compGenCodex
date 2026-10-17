@@ -485,7 +485,7 @@ def initialize_database(path: Path | None = None) -> Path:
 
 @contextmanager
 def get_connection(path: Path | None = None) -> Iterator[sqlite3.Connection]:
-    target = initialize_database(path)
+    target = path or database_path()
     connection = sqlite3.connect(target)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")

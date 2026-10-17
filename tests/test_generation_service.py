@@ -11,7 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 
 from app.core.settings import Settings
-from app.db.database import get_connection
+from app.db.database import get_connection, initialize_database
 from app.schemas.generation import GeneratedQuestion, GeneratedSolution, GenerationRequest
 from app.services.symbolic_verification import verify as verify_symbolically
 from app.services.generation import GenerationService
@@ -87,6 +87,7 @@ class GenerationServiceTests(unittest.TestCase):
         self.database_path = Path(self.temporary_directory.name) / "questions.db"
         self.previous_database_url = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = f"sqlite:///{self.database_path}"
+        initialize_database(self.database_path)
         upsert_seed_questions(ROOT_DIR / "sample_data" / "jee_definite_integrals_questions.json", self.database_path)
         self.settings = Settings("test", "generator", "validator", None, None, 3, 3, 0.90)
 

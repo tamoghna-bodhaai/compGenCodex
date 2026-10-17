@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.api.exports import download_export, get_exports
+from app.db.database import initialize_database
 from app.services.exports import ExportNotFoundError, list_exports, register_export, resolve_export
 
 
@@ -20,6 +21,7 @@ class ExportArchiveTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = f"sqlite:///{root / 'data' / 'archive.db'}"
         os.environ["EXPORT_ROOT"] = str(root / "exports")
         Path(os.environ["EXPORT_ROOT"]).mkdir()
+        initialize_database()
 
     def tearDown(self) -> None:
         os.environ.clear()

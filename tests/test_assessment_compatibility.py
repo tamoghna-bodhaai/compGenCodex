@@ -28,6 +28,7 @@ class AssessmentCompatibilityTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.old_url = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = f"sqlite:///{Path(self.temporary.name) / 'test.db'}"
+        initialize_database()
 
     def tearDown(self) -> None:
         if self.old_url is None:

@@ -11,7 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 
 from app.api.questions import list_questions, question_catalog
-from app.db.database import get_connection
+from app.db.database import get_connection, initialize_database
 from app.schemas.generation import GenerationRequest
 from app.services.retrieval import MetadataFirstRetriever, RetrievalError
 from app.services.seed_import import upsert_seed_questions
@@ -23,6 +23,7 @@ class QuestionCatalogTests(unittest.TestCase):
         self.database_path = Path(self.temporary_directory.name) / "questions.db"
         self.previous_database_url = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = f"sqlite:///{self.database_path}"
+        initialize_database(self.database_path)
         upsert_seed_questions(ROOT_DIR / "sample_data" / "jee_definite_integrals_questions.json", self.database_path)
 
     def tearDown(self) -> None:

@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT_DIR / "backend"))
 from fastapi import BackgroundTasks, UploadFile
 
 from app.api.questions import ingest_questions, list_questions
+from app.db.database import initialize_database
 from app.services.openrouter import ModelConfigurationError
 from app.services.ingestion import MAX_CHUNK_CHARACTERS, MAX_UPLOAD_BYTES, IngestionError, QuestionIngestionService, _best_pdf_pages, chunk_source, extract_source
 
@@ -49,6 +50,7 @@ class QuestionIngestionTests(unittest.IsolatedAsyncioTestCase):
         self.database_path = Path(self.temporary_directory.name) / "questions.db"
         self.previous_database_url = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = f"sqlite:///{self.database_path}"
+        initialize_database(self.database_path)
 
     def tearDown(self) -> None:
         if self.previous_database_url is None:

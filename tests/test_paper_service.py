@@ -14,7 +14,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "backend"))
 
 from app.schemas.papers import AddManualQuestionRequest, PaperCreateRequest, PaperUpdateRequest, QuestionEditRequest
-from app.db.database import get_connection
+from app.db.database import get_connection, initialize_database
 from app.services.branding import BrandingProfileService
 from app.services.papers import PaperConflictError, PaperNotFoundError, PaperService
 from app.services.seed_import import upsert_seed_questions
@@ -40,6 +40,7 @@ class PaperServiceTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.previous_database_url = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = f"sqlite:///{Path(self.temporary_directory.name) / 'papers.db'}"
+        initialize_database()
         self.service = PaperService()
         self.paper = self.service.create(paper_request())
         upsert_seed_questions(ROOT_DIR / "sample_data" / "jee_definite_integrals_questions.json")
