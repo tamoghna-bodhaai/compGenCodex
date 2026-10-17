@@ -434,19 +434,21 @@ def analytics(test_id: str, request: Request) -> dict:
         for student in students:
             attempts = connection.execute("SELECT * FROM test_attempts WHERE test_id=? AND student_id=? ORDER BY started_at DESC", (test_id,student["id"])).fetchall()
             attempts = [finalize_expired(connection,row) for row in attempts]
-            latest = attempts[0] if attempts else None
-            rows.append({"student":dict(student), "status":"not_started" if not latest else "submitted" if latest["submitted_at"] else "in_progress", "score": latest["score"] if latest else None, "attempt_count":len(attempts)})
-            if latest and latest["submitted_at"]:
-                version = connection.execute("SELECT ordinal,content FROM test_versions WHERE id=?", (latest["version_id"],)).fetchone()
-                responses = {entry["question_id"]: json.loads(entry["answer"]) if entry["answer"] else None for entry in connection.execute("SELECT * FROM attempt_responses WHERE attempt_id=?", (latest["id"],))}
+            active = next((attempt for attempt in attempts if not attempt["submitted_at"]), None)
+            latest_submitted = next((attempt for attempt in attempts if attempt["submitted_at"]), None)
+            status = "in_progress" if active else "submitted" if latest_submitted else "not_started"
+            rows.append({"student":dict(student), "status":status, "score": latest_submitted["score"] if latest_submitted else None, "attempt_count":len(attempts), "active_attempt_id":active["id"] if active else None, "latest_submitted_attempt_id":latest_submitted["id"] if latest_submitted else None})
+            if latest_submitted:
+                version = connection.execute("SELECT ordinal,content FROM test_versions WHERE id=?", (latest_submitted["version_id"],)).fetchone()
+                responses = {entry["question_id"]: json.loads(entry["answer"]) if entry["answer"] else None for entry in connection.execute("SELECT * FROM attempt_responses WHERE attempt_id=?", (latest_submitted["id"],))}
                 _, scored = score_version(json.loads(version["content"]), responses)
                 for item in scored:
-                    key = (latest["version_id"], item["id"])
+                    key = (latest_submitted["version_id"], item["id"])
                     stats = question_stats.setdefault(key, {"version":version["ordinal"], "question_id":item["id"], "section":item["section"], "stem":item["stem"], "responses":0, "correct":0, "points_total":0.0})
                     stats["responses"] += 1
                     stats["correct"] += int(item["correct"] is True)
                     stats["points_total"] += item["points"]
-        return {"students": rows, "questions": list(question_stats.values()), "summary": {"assigned":len(rows), "started":sum(row["attempt_count"]>0 for row in rows), "submitted":sum(row["status"]=="submitted" for row in rows)}}
+        return {"students": rows, "questions": list(question_stats.values()), "summary": {"assigned":len(rows), "started":sum(row["attempt_count"]>0 for row in rows), "submitted":sum(row["latest_submitted_attempt_id"] is not None for row in rows)}}
 
 
 @router.get("/tests/{test_id}/analytics.csv")
@@ -474,16 +476,18 @@ def student_tests(request: Request) -> dict:
             attempts = [finalize_expired(connection,row,now) for row in connection.execute("SELECT * FROM test_attempts WHERE test_id=? AND student_id=? ORDER BY started_at DESC", (test["id"],user["id"]))]
             currently_assigned = assigned(connection,test["id"],user["id"])
             availability = "closed" if not currently_assigned else "upcoming" if test["opens_at"] and now < parse_time(test["opens_at"]) else "closed" if test["closes_at"] and now >= parse_time(test["closes_at"]) else "available"
-            latest = attempts[0] if attempts else None
-            if latest and not result_released(connection, latest):
-                latest = {**latest, "score": None}
-            items.append({**test_view(connection,test),"availability":availability,"attempts_remaining":max(0,test["max_attempts"]-len(attempts)) if currently_assigned else 0,"latest_attempt":latest})
+            summaries = [{key: attempt[key] for key in ("id", "test_id", "started_at", "ends_at", "submitted_at", "score", "revision")} for attempt in attempts]
+            summaries = [{**summary, "score":summary["score"] if result_released(connection, attempt) else None} for summary, attempt in zip(summaries, attempts)]
+            active = next((summary for summary in summaries if not summary["submitted_at"]), None)
+            latest_submitted = next((summary for summary in summaries if summary["submitted_at"]), None)
+            latest = summaries[0] if summaries else None
+            items.append({**test_view(connection,test),"availability":availability,"attempts_remaining":max(0,test["max_attempts"]-len(attempts)) if currently_assigned else 0,"attempts":summaries,"active_attempt":active,"latest_submitted_attempt":latest_submitted,"latest_attempt":latest})
         item_by_id = {item["id"]: item for item in items}
         for pair in connection.execute("SELECT * FROM linked_test_pairs"):
             first, second = item_by_id.get(pair["first_test_id"]), item_by_id.get(pair["second_test_id"])
             if not first or not second:
                 continue
-            attempts = [first["latest_attempt"], second["latest_attempt"]]
+            attempts = [first["latest_submitted_attempt"], second["latest_submitted_attempt"]]
             if all(attempt and attempt["submitted_at"] and attempt["score"] is not None for attempt in attempts):
                 summary = {"first_title":first["title"], "second_title":second["title"], "combined_score":sum(attempt["score"] for attempt in attempts)}
                 first["linked_summary"] = summary

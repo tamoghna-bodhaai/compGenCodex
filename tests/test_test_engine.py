@@ -16,7 +16,7 @@ from app.core.auth import account_for_email, authenticated_account, create_sessi
 from app.db.database import SQLITE_SCHEMA, get_connection, initialize_database
 from app.api.auth import create_teacher, delete_teacher, teachers, login, update_teacher, AccountCreate, AccountUpdate
 from app.schemas.auth import LoginRequest
-from app.api.assessments import create_class, add_student, create_standalone_student, publish_paper, update_accommodation, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, AccommodationUpdate, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
+from app.api.assessments import analytics, create_class, add_student, create_standalone_student, publish_paper, update_accommodation, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, AccommodationUpdate, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
 from app.services.assessment import score_item, snapshot_item
 from app.api.banks import publish_bank, list_banks, BankPublish
 from app.api.questions import (
@@ -84,7 +84,7 @@ class TestEngineTests(unittest.TestCase):
               (question_id,paper_id,1,json.dumps({"stem":"2 + 2?","options":["1","2","3","4"],"marks":4}),json.dumps({"correct_answer":"D"}),"single_correct_mcq",1,0,'{}',now,now))
         token = current_user_context.set(teacher)
         try:
-            published = publish_paper(paper_id,PublishTest(duration_minutes=30),teacher_request)
+            published = publish_paper(paper_id,PublishTest(duration_minutes=30,max_attempts=2),teacher_request)
         finally:
             current_user_context.reset(token)
         test_id = published["id"]
@@ -98,6 +98,20 @@ class TestEngineTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code,409)
         submitted = submit_attempt(attempt["id"],student_request)
         self.assertEqual(submitted["score"],4)
+        first_listing = student_tests(student_request)["items"][0]
+        self.assertIsNone(first_listing["active_attempt"])
+        self.assertEqual(first_listing["latest_submitted_attempt"]["id"], attempt["id"])
+        self.assertEqual([item["id"] for item in first_listing["attempts"]], [attempt["id"]])
+        retry = start_attempt(test_id,student_request)
+        retry_listing = student_tests(student_request)["items"][0]
+        self.assertEqual(retry_listing["active_attempt"]["id"], retry["id"])
+        self.assertEqual(retry_listing["latest_submitted_attempt"]["id"], attempt["id"])
+        self.assertEqual([item["id"] for item in retry_listing["attempts"]], [retry["id"], attempt["id"]])
+        progress = analytics(test_id, teacher_request)
+        self.assertEqual(progress["students"][0]["status"], "in_progress")
+        self.assertEqual(progress["students"][0]["score"], 4)
+        self.assertEqual(progress["summary"]["submitted"], 1)
+        self.assertEqual(progress["questions"][0]["responses"], 1)
         with get_connection() as connection:
             connection.execute("UPDATE paper_questions SET question_json=? WHERE id=?", (json.dumps({"stem":"Changed question","options":["1","2","3","4"]}),question_id))
         token = current_user_context.set(teacher)

@@ -22,6 +22,9 @@
 .publishedSource { border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-wrap: anywhere; font-size: 13px; }
 .publishedSource a { font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
 .publishedSource p { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.attemptHistory { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 14px; }
+.attemptHistory h3 { font-size: 15px; }
+.attemptHistory a { color: var(--accent); font-weight: 650; }
 .check { display: flex; gap: 9px; align-items: center; font-size: 14px; }
 .error { color: var(--danger); background: var(--danger-soft); padding: 12px 14px; border-radius: 8px; }
 .notice { color: #166534; background: #dcfce7; padding: 12px 14px; border-radius: 8px; }
