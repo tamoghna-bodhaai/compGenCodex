@@ -256,7 +256,7 @@ class TestEngineTests(unittest.TestCase):
             connection.execute("INSERT INTO ingestion_jobs(id,source_name,state,phase,created_at,updated_at) VALUES ('source','source.pdf','succeeded','complete','2020','2020')")
             ids = [row["id"] for row in connection.execute("SELECT id FROM questions LIMIT 2")]
             connection.execute("UPDATE questions SET source_job_id=?, source_question_number=1, answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": "A"}), ids[0]))
-            connection.execute("UPDATE questions SET source_job_id=?, source_question_number=2, answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": None}), ids[1]))
+            connection.execute("UPDATE questions SET source_job_id=?, source_question_number=2, verification_status='pending_review', answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": None}), ids[1]))
 
         with self.assertRaises(HTTPException) as raised:
             publish_bank("legacy", BankPublish(source_job_id="source"), self.request(self.admin))
@@ -264,6 +264,20 @@ class TestEngineTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail["question_ids"], [ids[1]])
         with get_connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM questions WHERE source_job_id='source' AND published=1").fetchone()[0], 0)
+
+        result = publish_bank("legacy", BankPublish(source_job_id="source", allow_missing_answers=True), self.request(self.admin))
+        self.assertEqual(result["published_count"], 2)
+        self.assertEqual(result["missing_answer_count"], 1)
+        with get_connection() as connection:
+            rows = {row["id"]: dict(row) for row in connection.execute("SELECT id, published, verification_status, answer_json FROM questions WHERE source_job_id='source'")}
+        self.assertTrue(all(row["published"] for row in rows.values()))
+        self.assertEqual(rows[ids[1]]["verification_status"], "pending_review")
+        self.assertIsNone(json.loads(rows[ids[1]]["answer_json"])["correct_answer"])
+
+        teacher = create_teacher(AccountCreate(name="Teacher", email="teacher@example.com", access_code="22222"), self.request(self.admin))
+        with self.assertRaises(HTTPException) as forbidden:
+            publish_bank("legacy", BankPublish(question_ids=[ids[1]], allow_missing_answers=True), self.request(teacher))
+        self.assertEqual(forbidden.exception.status_code, 403)
 
     def test_populated_legacy_database_gains_owner_without_losing_rows(self):
         path = Path(self.temp.name) / "legacy.db"

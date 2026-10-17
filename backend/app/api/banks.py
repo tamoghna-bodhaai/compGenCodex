@@ -19,6 +19,7 @@ class BankCreate(BaseModel):
 class BankPublish(BaseModel):
     question_ids: list[str] = Field(default_factory=list)
     source_job_id: str | None = None
+    allow_missing_answers: bool = False
 
 
 def admin(request: Request) -> None:
@@ -72,12 +73,14 @@ def publish_bank(bank_id: str, payload: BankPublish, request: Request) -> dict:
         if len(rows) != len(ids):
             raise HTTPException(422, "Some questions no longer exist")
         missing = [row for row in rows if not has_answer(row["answer_json"])]
-        if missing:
+        if missing and not payload.allow_missing_answers:
             labels = [f"Q{row['source_question_number']}" if row["source_question_number"] is not None else row["id"] for row in missing]
             shown = ", ".join(labels[:20])
             if len(labels) > 20:
                 shown += f" and {len(labels) - 20} more"
-            raise HTTPException(422, {"message": f"Missing recorded answers for {shown}. Add or map answers in Ingestion before publishing.", "question_ids": [row["id"] for row in missing]})
-        connection.executemany("UPDATE questions SET bank_id=?, published=1, verification_status='approved' WHERE id=?", [(bank_id, identifier) for identifier in ids])
+            raise HTTPException(422, {"message": f"Missing recorded answers for {shown}. Add answers in Ingestion or choose to publish without them.", "question_ids": [row["id"] for row in missing]})
+        missing_ids = {row["id"] for row in missing}
+        connection.executemany("UPDATE questions SET bank_id=?, published=1, verification_status='approved' WHERE id=?", [(bank_id, identifier) for identifier in ids if identifier not in missing_ids])
+        connection.executemany("UPDATE questions SET bank_id=?, published=1 WHERE id=?", [(bank_id, identifier) for identifier in ids if identifier in missing_ids])
         connection.execute("UPDATE question_banks SET status='published' WHERE id=?", (bank_id,))
-    return {"id": bank_id, "published_count": len(ids)}
+    return {"id": bank_id, "published_count": len(ids), "missing_answer_count": len(missing)}
