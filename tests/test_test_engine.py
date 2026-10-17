@@ -121,6 +121,10 @@ class TestEngineTests(unittest.TestCase):
         self.assertEqual(progress["students"][0]["score"], 4)
         self.assertEqual(progress["summary"]["submitted"], 1)
         self.assertEqual(progress["questions"][0]["responses"], 1)
+        # Keep this reusable workflow's original one-attempt postcondition for
+        # expiry tests that invoke it as their fixture.
+        with get_connection() as connection:
+            connection.execute("DELETE FROM test_attempts WHERE id=?", (retry["id"],))
         with get_connection() as connection:
             connection.execute("UPDATE paper_questions SET question_json=? WHERE id=?", (json.dumps({"stem":"Changed question","options":["1","2","3","4"]}),question_id))
         token = current_user_context.set(teacher)

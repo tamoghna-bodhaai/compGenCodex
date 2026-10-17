@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import csv
 import io
+import logging
 import sqlite3
 import uuid
 import shutil
@@ -27,6 +28,7 @@ from app.services.assessment_templates import apply_template_rules, assessment_t
 from app.services.papers import PaperService, PaperNotFoundError
 
 router = APIRouter(prefix="/api/assessments", tags=["assessments"])
+logger = logging.getLogger(__name__)
 
 
 def test_asset_dir() -> Path:
@@ -247,35 +249,45 @@ def publish_paper(paper_id: str, payload: PublishTest, request: Request) -> dict
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
     now, test_id, version_id = iso(utc_now()), str(uuid.uuid4()), str(uuid.uuid4())
-    with get_connection() as connection:
-        test = connection.execute("SELECT * FROM tests WHERE paper_id=?", (paper_id,)).fetchone()
-        if test:
-            test_id = test["id"]
-            ordinal = connection.execute("SELECT COALESCE(MAX(ordinal),0)+1 FROM test_versions WHERE test_id=?", (test_id,)).fetchone()[0]
-            connection.execute("UPDATE tests SET title=?,duration_seconds=?,opens_at=?,closes_at=?,max_attempts=?,results_policy=?,status='published',published_version_id=?,updated_at=? WHERE id=?",
-              (paper["title"],payload.duration_minutes*60,iso(payload.opens_at) if payload.opens_at else None,iso(payload.closes_at) if payload.closes_at else None,payload.max_attempts,json.dumps(payload.results_policy),version_id,now,test_id))
-        else:
-            ordinal = 1
-            connection.execute("INSERT INTO tests(id,paper_id,owner_id,title,status,duration_seconds,opens_at,closes_at,max_attempts,results_policy,published_version_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              (test_id,paper_id,user["id"],paper["title"],"published",payload.duration_minutes*60,iso(payload.opens_at) if payload.opens_at else None,iso(payload.closes_at) if payload.closes_at else None,payload.max_attempts,json.dumps(payload.results_policy),version_id,now,now))
-        version_content = {"questions":items,"duration_seconds":payload.duration_minutes*60,"results_policy":payload.results_policy, "template":payload.template}
-        connection.execute("INSERT INTO test_versions(id,test_id,ordinal,content,published_at) VALUES (?,?,?,?,?)", (version_id,test_id,ordinal,json.dumps(version_content),now))
-        asset_dir = test_asset_dir()
-        for item in items:
-            for media in item["diagrams"]:
-                source = get_diagram(media["id"])
-                path = asset_path(source) if source else None
-                if path is None:
-                    raise HTTPException(422, "Diagram became unavailable while publishing")
-                asset_dir.mkdir(parents=True, exist_ok=True)
-                asset_id = str(uuid.uuid4())
-                destination = asset_dir / f"{asset_id}.png"
-                shutil.copyfile(path,destination)
-                connection.execute("INSERT INTO test_assets(id,version_id,storage_path,mime_type) VALUES (?,?,?,?)", (asset_id,version_id,str(destination),source.get("mime_type") or "image/png"))
-                media["id"],media["url"] = asset_id,f"/api/assessments/assets/{asset_id}"
-        connection.execute("UPDATE test_versions SET content=? WHERE id=?", (json.dumps(version_content),version_id))
-        audit(connection, user, "test_published", test_id, {"version":ordinal})
-        return test_view(connection, dict(connection.execute("SELECT * FROM tests WHERE id=?", (test_id,)).fetchone()))
+    copied_assets: list[Path] = []
+    try:
+        with get_connection() as connection:
+            test = connection.execute("SELECT * FROM tests WHERE paper_id=?", (paper_id,)).fetchone()
+            if test:
+                test_id = test["id"]
+                ordinal = connection.execute("SELECT COALESCE(MAX(ordinal),0)+1 FROM test_versions WHERE test_id=?", (test_id,)).fetchone()[0]
+                connection.execute("UPDATE tests SET title=?,duration_seconds=?,opens_at=?,closes_at=?,max_attempts=?,results_policy=?,status='published',published_version_id=?,updated_at=? WHERE id=?",
+                  (paper["title"],payload.duration_minutes*60,iso(payload.opens_at) if payload.opens_at else None,iso(payload.closes_at) if payload.closes_at else None,payload.max_attempts,json.dumps(payload.results_policy),version_id,now,test_id))
+            else:
+                ordinal = 1
+                connection.execute("INSERT INTO tests(id,paper_id,owner_id,title,status,duration_seconds,opens_at,closes_at,max_attempts,results_policy,published_version_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (test_id,paper_id,user["id"],paper["title"],"published",payload.duration_minutes*60,iso(payload.opens_at) if payload.opens_at else None,iso(payload.closes_at) if payload.closes_at else None,payload.max_attempts,json.dumps(payload.results_policy),version_id,now,now))
+            version_content = {"questions":items,"duration_seconds":payload.duration_minutes*60,"results_policy":payload.results_policy, "template":payload.template}
+            connection.execute("INSERT INTO test_versions(id,test_id,ordinal,content,published_at) VALUES (?,?,?,?,?)", (version_id,test_id,ordinal,json.dumps(version_content),now))
+            asset_dir = test_asset_dir()
+            for item in items:
+                for media in item["diagrams"]:
+                    source = get_diagram(media["id"])
+                    path = asset_path(source) if source else None
+                    if path is None:
+                        raise HTTPException(422, "Diagram became unavailable while publishing")
+                    asset_dir.mkdir(parents=True, exist_ok=True)
+                    asset_id = str(uuid.uuid4())
+                    destination = asset_dir / f"{asset_id}.png"
+                    shutil.copyfile(path,destination)
+                    copied_assets.append(destination)
+                    connection.execute("INSERT INTO test_assets(id,version_id,storage_path,mime_type) VALUES (?,?,?,?)", (asset_id,version_id,str(destination),source.get("mime_type") or "image/png"))
+                    media["id"],media["url"] = asset_id,f"/api/assessments/assets/{asset_id}"
+            connection.execute("UPDATE test_versions SET content=? WHERE id=?", (json.dumps(version_content),version_id))
+            audit(connection, user, "test_published", test_id, {"version":ordinal})
+            return test_view(connection, dict(connection.execute("SELECT * FROM tests WHERE id=?", (test_id,)).fetchone()))
+    except Exception:
+        for destination in copied_assets:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Failed to clean copied test asset %s", destination, exc_info=True)
+        raise
 
 
 @router.get("/assets/{asset_id}")

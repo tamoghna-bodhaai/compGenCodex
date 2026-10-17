@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -8,14 +9,16 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from PIL import Image
 
 from tests import test_paper_service, test_test_engine
-from app.api.assessments import AccommodationUpdate, AssignmentUpdate, LinkTest, PublishTest, ResponseIn, create_class, add_student, publish_paper, update_assignments, update_accommodation, start_attempt, save_response, submit_attempt, get_attempt, student_tests, result, link_test, list_assessment_templates, ClassroomCreate
+from app.api.assessments import AccommodationUpdate, AssignmentUpdate, LinkTest, PublishTest, ResponseIn, create_class, add_student, publish_paper, update_assignments, update_accommodation, start_attempt, save_response, submit_attempt, get_attempt, student_tests, result, link_test, list_assessment_templates, test_asset_dir as assessment_asset_dir, ClassroomCreate
 from app.api.auth import AccountCreate, create_teacher
 from app.core.auth import current_user_context
 from app.db.database import get_connection
 from app.schemas.papers import PaperCreateRequest
 from app.services.papers import PaperConflictError
+from app.services.diagrams import store_diagram
 
 
 class PaperSelectionTests(unittest.TestCase):
@@ -121,6 +124,22 @@ class ResultPrivacyTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:
             outcomes = list(pool.map(save, (["A"], ["B"])))
         self.assertEqual(sorted(outcomes), [200, 409])
+
+    def test_failed_republication_removes_only_new_immutable_media(self):
+        image = io.BytesIO()
+        Image.new("RGB", (60, 40), "navy").save(image, format="PNG")
+        store_diagram(owner_column="paper_question_id", owner_id=self.question_id, provenance="source_crop", data=image.getvalue(), description="Test diagram")
+        asset_directory = assessment_asset_dir()
+        before = set(asset_directory.glob("*.png")) if asset_directory.exists() else set()
+        with get_connection() as connection:
+            versions_before = connection.execute("SELECT COUNT(*) FROM test_versions WHERE test_id=?", (self.test_id,)).fetchone()[0]
+        with patch("app.api.assessments.audit", side_effect=RuntimeError("failure after media copy")):
+            with self.assertRaisesRegex(RuntimeError, "failure after media copy"):
+                publish_paper("paper-privacy", PublishTest(duration_minutes=30), self.teacher_request)
+        after = set(asset_directory.glob("*.png")) if asset_directory.exists() else set()
+        self.assertEqual(after, before)
+        with get_connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM test_versions WHERE test_id=?", (self.test_id,)).fetchone()[0], versions_before)
 
     def test_expired_attempt_is_finalized_even_when_result_is_not_released(self):
         with get_connection() as connection:
