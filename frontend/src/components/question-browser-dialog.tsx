@@ -13,6 +13,11 @@ function breadcrumb(selection: BankSelection) {
   return [selection.exam, selection.subject, selection.chapter || undefined, selection.topic, selection.subtopic].filter(Boolean).join(" · ");
 }
 
+function hasRecordedAnswer(question: SeedQuestion) {
+  const answer = question.answer_json?.correct_answer;
+  return answer !== null && answer !== undefined && answer !== "" && (!Array.isArray(answer) || answer.length > 0);
+}
+
 function QuestionDetail({ question, onClose, onChange }: { question: SeedQuestion | null; onClose: () => void; onChange: (question: SeedQuestion) => void }) {
   const { toast, role } = useWorkspace();
   const [solving, setSolving] = useState(false);
@@ -46,8 +51,8 @@ function QuestionDetail({ question, onClose, onChange }: { question: SeedQuestio
   </Dialog>;
 }
 
-export function QuestionBrowserDialog({ open, selection, chapters, title = "Questions", selectedIds, selectable = false, selectionMode = "source", onConfirm, onClose }: {
-  open: boolean; selection: BankSelection; chapters?: string[]; title?: string; selectedIds?: string[]; selectable?: boolean; selectionMode?: "source" | "exact"; onConfirm?: (ids: string[]) => void; onClose: () => void;
+export function QuestionBrowserDialog({ open, selection, chapters, title = "Questions", selectedIds, unavailableIds = [], selectable = false, selectionMode = "source", onConfirm, onClose }: {
+  open: boolean; selection: BankSelection; chapters?: string[]; title?: string; selectedIds?: string[]; unavailableIds?: string[]; selectable?: boolean; selectionMode?: "source" | "exact"; onConfirm?: (ids: string[]) => void; onClose: () => void;
 }) {
   const [questions, setQuestions] = useState<SeedQuestion[]>([]);
   const [total, setTotal] = useState(0);
@@ -67,13 +72,13 @@ export function QuestionBrowserDialog({ open, selection, chapters, title = "Ques
     return () => controller.abort();
   }, [open, selection, chapters, offset]);
 
-  function toggle(id: string) { setChosen((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
+  function toggle(id: string) { if (unavailableIds.includes(id)) return; setChosen((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
   const page = Math.floor(offset / 20) + 1;
   return <>
     <Dialog open={open} wide title={title} subtitle={breadcrumb(selection)} onClose={onClose} footer={selectable ? <div className={s.modalActions}><span className={s.muted}>{chosen.length} question{chosen.length === 1 ? "" : "s"} selected</span><Button tone="primary" onClick={() => onConfirm?.(chosen)}>Use selected questions</Button></div> : undefined}>
       <div className={s.modalBody}><div className={s.questionBrowserHead}><p>{total} classified question{total === 1 ? "" : "s"}</p>{selectable && <p>{selectionMode === "exact" ? "Selected questions are copied into the paper." : "Selected questions are reusable sources for generated variations."}</p>}</div>
         {error ? <EmptyState title="Couldn’t load questions" description={error} /> : questions.length ? <div className={s.bankQuestionGrid}>{questions.map((question) => <article className={s.bankQuestionCard} key={question.id}>
-          <div className={s.questionBrowserCardHead}><span className={s.eyebrow}>Question {question.source_reference?.match(/question (\d+)/i)?.[1] || ""}</span>{selectable && <label className={s.seedToggle}><input type="checkbox" checked={chosen.includes(question.id)} disabled={selectionMode === "source" && !question.response_spec?.supported_for_generation} onChange={() => toggle(question.id)} /> {selectionMode === "exact" ? "Select question" : question.response_spec?.supported_for_generation ? "Select source" : "Review only"}</label>}</div>
+          <div className={s.questionBrowserCardHead}><span className={s.eyebrow}>Question {question.source_reference?.match(/question (\d+)/i)?.[1] || ""}</span>{selectable && <label className={s.seedToggle}><input type="checkbox" checked={chosen.includes(question.id)} disabled={unavailableIds.includes(question.id) || !hasRecordedAnswer(question) || (selectionMode === "source" && !question.response_spec?.supported_for_generation)} onChange={() => toggle(question.id)} /> {unavailableIds.includes(question.id) ? "Already selected in another section" : !hasRecordedAnswer(question) ? "Missing recorded answer" : selectionMode === "exact" ? "Select question" : question.response_spec?.supported_for_generation ? "Select source" : "Review only"}</label>}</div>
           <MathContent as="p" value={question.question_json.stem} />{question.diagrams?.some((diagram) => diagram.url) && <span className={s.chip}>Diagram</span>}<small>{[question.question_type.replaceAll("_", " "), `Difficulty ${question.difficulty}/5`, question.verification_status.replaceAll("_", " ")].join(" · ")}</small>
           <Button size="small" onClick={() => setDetail(question)}>Read full question</Button>
         </article>)}</div> : <EmptyState title="No questions match this branch" description="Choose a different taxonomy branch." />}

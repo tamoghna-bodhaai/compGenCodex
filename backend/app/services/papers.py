@@ -258,9 +258,9 @@ class PaperService:
                 "INSERT INTO paper_questions (id, paper_id, section_id, position, question_json, answer_json, solution, question_type, difficulty, locked, generation_metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
                 (
                     question_id, paper_id, request.section_id, position, json.dumps(request.question_json()),
-                    json.dumps({"correct_answer": request.correct_answer}) if request.correct_answer else None,
+                    json.dumps({"correct_answer": request.correct_answer}) if request.correct_answer is not None else None,
                     request.solution, request.question_type.value, request.difficulty,
-                    json.dumps({"origin": "manual"}), now, now,
+                    json.dumps({"origin": "manual", "response_spec": request.response_spec} if request.response_spec else {"origin": "manual"}), now, now,
                 ),
             )
         return self.get(paper_id)

@@ -88,6 +88,21 @@ def classes(request: Request) -> dict:
         return {"items": [{**dict(row), "students": [dict(member) for member in connection.execute("SELECT u.id,u.name,u.email,u.role,u.status FROM users u JOIN class_memberships m ON m.student_id=u.id WHERE m.class_id=? ORDER BY u.name", (row["id"],))]} for row in rows]}
 
 
+@router.get("/students")
+def students(request: Request) -> dict:
+    user = actor(request, "admin", "teacher")
+    with get_connection() as connection:
+        where, values = ("role='student'", []) if user["role"] == "admin" else ("role='student' AND owner_id=?", [user["id"]])
+        rows = connection.execute(f"SELECT id,name,email,role,status FROM users WHERE {where} ORDER BY name,email", values).fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
+@router.post("/students", status_code=201)
+def create_standalone_student(payload: AccountCreate, request: Request) -> dict:
+    user = actor(request, "admin", "teacher")
+    return _create_account(payload, "student", user["id"])
+
+
 @router.post("/classes", status_code=201)
 def create_class(payload: ClassroomCreate, request: Request) -> dict:
     user = actor(request, "admin", "teacher")
@@ -166,6 +181,21 @@ class PublishTest(BaseModel):
         return self
 
 
+def paper_cbt_settings(paper: dict) -> tuple[int | None, float | None]:
+    """Read authoring settings once so exports and CBT have the same defaults."""
+    try:
+        raw_branding = paper.get("branding_config") or {}
+        branding = raw_branding if isinstance(raw_branding, dict) else json.loads(raw_branding)
+    except (TypeError, ValueError):
+        branding = {}
+    duration = branding.get("duration_minutes")
+    total_marks = branding.get("total_marks")
+    return (
+        int(duration) if isinstance(duration, (int, float)) and duration > 0 else None,
+        float(total_marks) if isinstance(total_marks, (int, float)) and total_marks > 0 else None,
+    )
+
+
 @router.post("/papers/{paper_id}/publish", status_code=201)
 def publish_paper(paper_id: str, payload: PublishTest, request: Request) -> dict:
     user = actor(request, "admin", "teacher")
@@ -210,6 +240,12 @@ def publish_paper(paper_id: str, payload: PublishTest, request: Request) -> dict
             items.append(item)
         except ValueError as error:
             errors.append({"position": position, "question_id": question["id"], "reason": str(error)})
+    paper_duration, paper_total_marks = paper_cbt_settings(paper)
+    snapshot_total = sum(float(item["scoring"]["full"]) for item in items)
+    if paper_duration is not None and payload.duration_minutes != paper_duration:
+        errors.append({"position": 0, "question_id": "paper-settings", "reason": f"CBT duration must match the paper setting ({paper_duration} minutes). Update the paper timing before publishing."})
+    if paper_total_marks is not None and abs(snapshot_total - paper_total_marks) > 0.001:
+        errors.append({"position": 0, "question_id": "paper-settings", "reason": f"Question marks total {snapshot_total:g}, but this paper is set to {paper_total_marks:g} marks. Update question marks or paper marks before publishing."})
     if errors:
         raise HTTPException(422, {"message": "Fix questions before publishing", "questions": errors})
     if payload.template == "jee_main_2026_paper1" and any(template_counts[(subject, kind)] != expected for subject in ("Mathematics", "Physics", "Chemistry") for kind, expected in (("single_correct_mcq",20), ("numerical",5))):
@@ -358,8 +394,8 @@ def update_assignments(test_id: str, payload: AssignmentUpdate, request: Request
             if not connection.execute("SELECT 1 FROM classrooms WHERE id=? AND owner_id=?", (class_id,user["id"])).fetchone():
                 raise HTTPException(422, "Every class must belong to you")
         for student_id in student_ids:
-            if not connection.execute("SELECT 1 FROM class_memberships m JOIN classrooms c ON c.id=m.class_id WHERE m.student_id=? AND c.owner_id=?", (student_id,user["id"])).fetchone():
-                raise HTTPException(422, "Every student must belong to your class roster")
+            if not connection.execute("SELECT 1 FROM users WHERE id=? AND role='student' AND status='active' AND (?='admin' OR owner_id=?)", (student_id,user["role"],user["id"])).fetchone():
+                raise HTTPException(422, "Every student must be an active student you manage")
         connection.execute("DELETE FROM test_assignments WHERE test_id=?", (test_id,))
         connection.executemany("INSERT INTO test_assignments(test_id,class_id) VALUES (?,?)", [(test_id,value) for value in class_ids])
         connection.executemany("INSERT INTO test_assignments(test_id,student_id) VALUES (?,?)", [(test_id,value) for value in student_ids])

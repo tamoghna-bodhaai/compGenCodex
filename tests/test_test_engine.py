@@ -16,7 +16,7 @@ from app.core.auth import account_for_email, authenticated_account, create_sessi
 from app.db.database import SQLITE_SCHEMA, get_connection, initialize_database
 from app.api.auth import create_teacher, delete_teacher, teachers, login, update_teacher, AccountCreate, AccountUpdate
 from app.schemas.auth import LoginRequest
-from app.api.assessments import create_class, add_student, publish_paper, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
+from app.api.assessments import create_class, add_student, create_standalone_student, publish_paper, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
 from app.services.assessment import score_item, snapshot_item
 from app.api.banks import publish_bank, list_banks, BankPublish
 from app.api.questions import list_questions
@@ -103,6 +103,24 @@ class TestEngineTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             get_attempt(attempt["id"],teacher_request)
         self.assertEqual(raised.exception.status_code,403)
+
+    def test_direct_student_assignment_and_paper_setting_validation(self):
+        teacher = create_teacher(AccountCreate(name="Teacher",email="teacher@example.com",access_code="22222"),self.request(self.admin))
+        teacher_request = self.request(teacher)
+        student = create_standalone_student(AccountCreate(name="Direct",email="direct@example.com",access_code="33333"),teacher_request)
+        paper_id, question_id, now = str(uuid.uuid4()),str(uuid.uuid4()),datetime.now(UTC).isoformat()
+        with get_connection() as connection:
+            connection.execute("INSERT INTO papers(id,title,exam,subject,generation_config,branding_config,status,created_at,updated_at,owner_id) VALUES (?,?,?,?,?,?,?,?,?,?)", (paper_id,"Quiz","JEE","Physics",'{}',json.dumps({"duration_minutes":30,"total_marks":4}),"draft",now,now,teacher["id"]))
+            connection.execute("INSERT INTO paper_questions(id,paper_id,position,question_json,answer_json,question_type,difficulty,locked,generation_metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (question_id,paper_id,1,json.dumps({"stem":"2 + 2?","options":["1","2","3","4"],"marks":4}),json.dumps({"correct_answer":"D"}),"single_correct_mcq",1,0,'{}',now,now))
+        with self.assertRaisesRegex(HTTPException,"Fix questions"):
+            publish_paper(paper_id,PublishTest(duration_minutes=20),teacher_request)
+        token = current_user_context.set(teacher)
+        try:
+            test = publish_paper(paper_id,PublishTest(duration_minutes=30),teacher_request)
+        finally:
+            current_user_context.reset(token)
+        update_assignments(test["id"],AssignmentUpdate(student_ids=[student["id"]]),teacher_request)
+        self.assertEqual(len(student_tests(self.request(student))["items"]),1)
 
     def test_active_attempt_survives_republish_and_unassignment(self):
         teacher = create_teacher(AccountCreate(name="Teacher",email="teacher@example.com",access_code="22222"),self.request(self.admin))

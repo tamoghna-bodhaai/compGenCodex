@@ -52,7 +52,8 @@ class PaperQuestionInput(BaseModel):
     question_type: QuestionType
     stem: str = Field(min_length=1)
     options: list[str] = Field(default_factory=list)
-    correct_answer: str | None = None
+    correct_answer: Any | None = None
+    response_spec: dict[str, Any] | None = None
     solution: str | None = None
     difficulty: int = Field(ge=1, le=5)
     marks: int = Field(default=4, ge=1, le=100)
@@ -66,6 +67,12 @@ class PaperQuestionInput(BaseModel):
             raise ValueError("single-correct MCQs require exactly four options")
         if self.question_type == QuestionType.MULTIPLE_CORRECT and len(self.options) < 2:
             raise ValueError("multiple-correct MCQs require at least two options")
+        if self.response_spec is not None:
+            from app.schemas.assessment import ResponseSpec
+            try:
+                ResponseSpec.model_validate(self.response_spec)
+            except ValueError as error:
+                raise ValueError("Invalid CBT response or marking rules") from error
         return self
 
     def question_json(self) -> dict[str, Any]:
