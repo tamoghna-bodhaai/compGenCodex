@@ -103,8 +103,9 @@ class GenerationRequest(BaseModel):
     @model_validator(mode="after")
     def distributions_have_equal_totals(self) -> "GenerationRequest":
         if self.subtopic_plans:
-            if len({(item.topic, item.subtopic) for item in self.subtopic_plans}) != len(self.subtopic_plans):
-                raise ValueError("subtopic_plans cannot repeat a topic/subtopic pair")
+            keys = {(item.topic, item.subtopic, item.resolved_section_title()) for item in self.subtopic_plans}
+            if len(keys) != len(self.subtopic_plans):
+                raise ValueError("subtopic_plans cannot repeat a taxonomy and section combination")
             return self
         type_total = sum(item.count for item in self.question_types)
         difficulty_total = sum(item.count for item in self.difficulty_distribution)

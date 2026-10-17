@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCreationPayload, defaultCreation, defaultPlan, paperDashboardState, parentBankSelection, remoteDraftAction } from "@/lib/logic";
-import type { PaperSummary } from "@/lib/types";
+import type { PaperSummary, SeedQuestion } from "@/lib/types";
 
 describe("paper creation payload", () => {
   it("keeps per-subtopic type and difficulty totals", () => {
@@ -9,18 +9,18 @@ describe("paper creation payload", () => {
     creation.subtopicKeys = ["Definite Integrals::Properties"];
     creation.plans[creation.subtopicKeys[0]] = defaultPlan();
     const payload = buildCreationPayload(creation);
-    expect(payload.subtopic_plans[0]).toMatchObject({ topic: "Definite Integrals", subtopic: "Properties", section_title: "Definite Integrals › Properties" });
+    expect(payload.subtopic_plans[0]).toMatchObject({ topic: "Definite Integrals", subtopic: "Properties", section_title: "MCQ" });
     expect(payload.question_types).toEqual([{ type: "single_correct_mcq", count: 5 }]);
     expect(payload.difficulty_distribution).toEqual([{ difficulty: 3, count: 5 }]);
   });
 
-  it("uses the compatible top-level request shape for one topic-only plan", () => {
+  it("keeps a topic-only plan so its question-type section is preserved", () => {
     const creation = defaultCreation();
     creation.chapters = ["Calculus"];
     creation.subtopicKeys = ["Definite Integrals::"];
     creation.plans[creation.subtopicKeys[0]] = defaultPlan();
     const payload = buildCreationPayload(creation);
-    expect(payload.usesTopicOnlyRequest).toBe(true);
+    expect(payload.usesTopicOnlyRequest).toBe(false);
     expect(payload.subtopic_plans[0]).not.toHaveProperty("subtopic");
     expect(payload.question_types).toEqual([{ type: "single_correct_mcq", count: 5 }]);
   });
@@ -33,13 +33,33 @@ describe("paper creation payload", () => {
     expect(buildCreationPayload(creation).subtopic_plans[0]).toMatchObject({ seed_question_ids: ["seed-a", "seed-b"] });
   });
 
-  it("retains exact selections for a topic-only bank paper without variations", () => {
+  it("splits mixed generated questions into type sections without losing difficulty totals", () => {
     const creation = defaultCreation();
-    creation.subtopicKeys = ["Integrals::"];
-    creation.plans[creation.subtopicKeys[0]] = { ...defaultPlan(), bankQuestionIds: ["q1", "q2"], generateVariations: false };
-    const payload = buildCreationPayload(creation);
+    creation.chapters = ["Calculus"];
+    creation.subtopicKeys = ["Definite Integrals::Properties"];
+    creation.plans[creation.subtopicKeys[0]] = {
+      ...defaultPlan(),
+      questionCounts: { single_correct_mcq: 2, numerical: 1, multiple_correct_mcq: 0, subjective: 0 },
+      difficultyCounts: { easy: 1, medium: 2, hard: 0 },
+    };
+    const plans = buildCreationPayload(creation).subtopic_plans;
+    expect(plans).toHaveLength(2);
+    expect(plans[0]).toMatchObject({ section_title: "MCQ", question_types: [{ type: "single_correct_mcq", count: 2 }], difficulty_distribution: [{ difficulty: 1, count: 1 }, { difficulty: 3, count: 1 }] });
+    expect(plans[1]).toMatchObject({ section_title: "Numerical", question_types: [{ type: "numerical", count: 1 }], difficulty_distribution: [{ difficulty: 3, count: 1 }] });
+  });
+
+  it("groups exact bank questions into question-type sections", () => {
+    const creation = defaultCreation();
+    const questions = [
+      { id: "q1", chapter: "Calculus", topic: "Integrals", subtopic: null, question_type: "single_correct_mcq" },
+      { id: "q2", chapter: "Calculus", topic: "Integrals", subtopic: null, question_type: "numerical" },
+    ] as SeedQuestion[];
+    const payload = buildCreationPayload(creation, questions);
     expect(payload.usesTopicOnlyRequest).toBe(false);
-    expect(payload.subtopic_plans[0]).toMatchObject({ section_title: "Integrals", bank_question_ids: ["q1", "q2"], question_types: [], difficulty_distribution: [] });
+    expect(payload.subtopic_plans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section_title: "MCQ", bank_question_ids: ["q1"] }),
+      expect.objectContaining({ section_title: "Numerical", bank_question_ids: ["q2"] }),
+    ]));
   });
 });
 

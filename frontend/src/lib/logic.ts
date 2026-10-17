@@ -5,6 +5,7 @@ import type {
   CreationState,
   PaperSummary,
   QuestionType,
+  SeedQuestion,
   SubtopicPlanPayload,
 } from "@/lib/types";
 
@@ -15,6 +16,11 @@ export const QUESTION_TYPES: Array<[QuestionType, string]> = [
   ["numerical", "Numerical"],
   ["multiple_correct_mcq", "Multiple answer"],
 ];
+const QUESTION_TYPE_LABELS: Partial<Record<QuestionType, string>> = {
+  single_correct_mcq: "MCQ",
+  numerical: "Numerical",
+  multiple_correct_mcq: "Multiple answer",
+};
 export const DIFFICULTIES: Array<["easy" | "medium" | "hard", string, number]> = [
   ["easy", "Easy", 1],
   ["medium", "Medium", 3],
@@ -64,33 +70,71 @@ export function splitSubtopicKey(key: string): [string, string] {
   return [key.slice(0, separator), key.slice(separator + 2)];
 }
 
-export function buildCreationPayload(creation: CreationState) {
-  const subtopic_plans: SubtopicPlanPayload[] = creation.subtopicKeys.map((key) => {
+export function buildCreationPayload(creation: CreationState, bankQuestions: SeedQuestion[] = []) {
+  const variationPlans: SubtopicPlanPayload[] = creation.subtopicKeys.flatMap((key) => {
     const [topic, subtopic] = splitSubtopicKey(key);
     const plan = creation.plans[key] || defaultPlan();
-    return {
-      topic,
-      ...(subtopic ? { subtopic } : {}),
-      chapters: creation.chapters,
-      section_title: plan.sectionTitle.trim() || (subtopic ? `${topic} › ${subtopic}` : topic),
-      question_types: plan.generateVariations ? QUESTION_TYPES.map(([type]) => ({ type, count: Number(plan.questionCounts[type]) || 0 })).filter((item) => item.count > 0) : [],
-      difficulty_distribution: plan.generateVariations ? DIFFICULTIES.map(([planKey, , difficulty]) => ({ difficulty, count: Number(plan.difficultyCounts[planKey]) || 0 })).filter((item) => item.count > 0) : [],
-      generation_mode: plan.generation_mode,
-      variation_strength: plan.variation_strength,
-      ...(plan.seedQuestionIds.length ? { seed_question_ids: plan.seedQuestionIds } : {}),
-      ...(plan.bankQuestionIds.length ? { bank_question_ids: plan.bankQuestionIds } : {}),
-    };
+    if (!plan.generateVariations) return [];
+    const difficulties = DIFFICULTIES.flatMap(([planKey, , difficulty]) => Array.from({ length: Number(plan.difficultyCounts[planKey]) || 0 }, () => difficulty));
+    let difficultyOffset = 0;
+    return QUESTION_TYPES.flatMap(([type]) => {
+      const count = Number(plan.questionCounts[type]) || 0;
+      if (!count) return [];
+      const distribution = new Map<number, number>();
+      difficulties.slice(difficultyOffset, difficultyOffset + count).forEach((difficulty) => distribution.set(difficulty, (distribution.get(difficulty) || 0) + 1));
+      difficultyOffset += count;
+      return [{
+        topic,
+        ...(subtopic ? { subtopic } : {}),
+        chapters: creation.chapters,
+        section_title: QUESTION_TYPE_LABELS[type] || type.replaceAll("_", " "),
+        question_types: [{ type, count }],
+        difficulty_distribution: [...distribution].map(([difficulty, difficultyCount]) => ({ difficulty, count: difficultyCount })),
+        generation_mode: plan.generation_mode,
+        variation_strength: plan.variation_strength,
+        ...(plan.seedQuestionIds.length ? { seed_question_ids: plan.seedQuestionIds } : {}),
+      }];
+    });
   });
+  const bankGroups = new Map<string, SeedQuestion[]>();
+  bankQuestions.forEach((question) => {
+    const key = [question.topic || "Unclassified", question.subtopic || "", question.question_type].join("::");
+    bankGroups.set(key, [...(bankGroups.get(key) || []), question]);
+  });
+  const bankPlans: SubtopicPlanPayload[] = [...bankGroups.values()].map((questions) => {
+    const first = questions[0];
+    return {
+      topic: first.topic || "Unclassified",
+      ...(first.subtopic ? { subtopic: first.subtopic } : {}),
+      chapters: [...new Set(questions.map((question) => question.chapter).filter((chapter): chapter is string => !!chapter))],
+      section_title: QUESTION_TYPE_LABELS[first.question_type] || first.question_type.replaceAll("_", " "),
+      question_types: [],
+      difficulty_distribution: [],
+      generation_mode: creation.generation_mode,
+      variation_strength: creation.variation_strength,
+      bank_question_ids: questions.map((question) => question.id),
+    };
+  }).sort((left, right) => QUESTION_TYPES.findIndex(([, label]) => label === left.section_title) - QUESTION_TYPES.findIndex(([, label]) => label === right.section_title));
+  const consolidated = new Map<string, SubtopicPlanPayload>();
+  [...variationPlans, ...bankPlans].forEach((plan) => {
+    const key = [plan.topic, plan.subtopic || "", plan.section_title].join("::");
+    const existing = consolidated.get(key);
+    if (!existing) { consolidated.set(key, plan); return; }
+    consolidated.set(key, {
+      ...existing,
+      bank_question_ids: [...new Set([...(existing.bank_question_ids || []), ...(plan.bank_question_ids || [])])],
+    });
+  });
+  const subtopic_plans = [...consolidated.values()];
   const typeTotals = new Map<QuestionType, number>();
   const difficultyTotals = new Map<number, number>();
   for (const plan of subtopic_plans) {
     for (const item of plan.question_types) typeTotals.set(item.type, (typeTotals.get(item.type) || 0) + item.count);
     for (const item of plan.difficulty_distribution) difficultyTotals.set(item.difficulty, (difficultyTotals.get(item.difficulty) || 0) + item.count);
   }
-  // Older API deployments require subtopic_plans[].subtopic even though a
-  // topic-only seed bank is valid. A single topic-only selection can use the
-  // original top-level request shape, which both API versions understand.
-  const usesTopicOnlyRequest = subtopic_plans.length === 1 && !subtopic_plans[0].subtopic && !subtopic_plans[0].bank_question_ids?.length;
+  // Keep the plans in the request even for topic-only coverage so the backend
+  // can consolidate every question into its question-type section.
+  const usesTopicOnlyRequest = false;
   return {
     title: creation.title.trim(), exam: creation.exam, subject: creation.subject, chapters: creation.chapters,
     topics: [...new Set(subtopic_plans.map((item) => item.topic).filter(Boolean))],

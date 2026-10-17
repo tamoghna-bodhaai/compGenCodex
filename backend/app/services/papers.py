@@ -92,9 +92,6 @@ class PaperService:
 
     def create(self, request: PaperCreateRequest) -> dict:
         self._validate_selected_seed_questions(request)
-        titles = [plan.resolved_section_title() for plan in request.subtopic_plans or []]
-        if len(titles) != len(set(titles)):
-            raise PaperConflictError("Section titles must be unique.")
         paper_id = str(uuid.uuid4())
         now = _now()
         with get_connection() as connection:
@@ -1073,7 +1070,7 @@ class PaperService:
         return len({slot.slot for slot in slots} - PaperService._completed_initial_slots(paper))
 
     def _ensure_plan_sections(self, paper_id: str, request: GenerationRequest) -> dict[str, str]:
-        """Create one section per subtopic plan and return title -> section id."""
+        """Create one section per resolved title and return title -> section id."""
         if not request.subtopic_plans:
             return {}
         self._ensure_paper(paper_id)

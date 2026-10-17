@@ -157,6 +157,23 @@ class PaperServiceTests(unittest.TestCase):
         self.assertEqual([section["title"] for section in paper["sections"]], ["Section A · Properties", "Definite Integrals › Area"])
         self.assertEqual(paper["requested_question_count"], 3)
 
+    def test_plans_with_the_same_question_type_share_one_section(self) -> None:
+        paper = self.service.create(
+            PaperCreateRequest.model_validate(
+                {
+                    "title": "Type sections", "exam": "JEE", "subject": "Mathematics",
+                    "generation_mode": "structural_variation",
+                    "subtopic_plans": [
+                        {"topic": "Definite Integrals", "subtopic": "Properties", "section_title": "MCQ",
+                         "question_types": [{"type": "single_correct_mcq", "count": 1}], "difficulty_distribution": [{"difficulty": 3, "count": 1}]},
+                        {"topic": "Definite Integrals", "subtopic": "Area", "section_title": "MCQ",
+                         "question_types": [{"type": "single_correct_mcq", "count": 1}], "difficulty_distribution": [{"difficulty": 3, "count": 1}]},
+                    ],
+                }
+            )
+        )
+        self.assertEqual([section["title"] for section in paper["sections"]], ["MCQ"])
+
     def test_selected_source_questions_must_exist_and_match_plan_scope(self) -> None:
         with get_connection() as connection:
             seed_id = connection.execute("SELECT id FROM questions WHERE topic = 'Definite Integrals' LIMIT 1").fetchone()[0]
