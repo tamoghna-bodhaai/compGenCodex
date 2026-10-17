@@ -97,7 +97,7 @@ def validate_answer(spec: ResponseSpec, answer: object, option_count: int = 0, e
         rule = spec.numeric or NumericRule()
         if rule.integer_only and not value.is_integer():
             return False
-        if rule.permitted_precision is not None and round(value, rule.permitted_precision) != value:
+        if rule.permitted_precision is not None and not rule.rounding_rule and round(value, rule.permitted_precision) != value:
             return False
         if not ((rule.accepted_min is None or value >= rule.accepted_min) and (rule.accepted_max is None or value <= rule.accepted_max)):
             return False

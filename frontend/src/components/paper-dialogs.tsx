@@ -109,7 +109,7 @@ export function PaperDialogs({ kind, paper, comparisonQuestion, onClose, onChang
     ["Difficulty", `${generatedQuestion.difficulty}/5`, `${(selectedReference || selectedSeed)?.difficulty || "Not recorded"}/5`],
     ["Primary concept", generatedQuestion.question_json.primary_concept || "Not recorded", selectedReference?.primary_concept || selectedSeed?.primary_concept || "Not recorded"],
     ["Options", `${generatedQuestion.question_json.options?.length || 0} options`, `${selectedReference?.options?.length || selectedSeed?.question_json.options?.length || 0} options`],
-    ["Answer", generatedQuestion.answer_json?.correct_answer || "Not recorded", selectedReference?.correct_answer || selectedSeed?.answer_json?.correct_answer || "Not recorded"],
+    ["Answer", JSON.stringify(generatedQuestion.answer_json?.correct_answer ?? "Not recorded"), JSON.stringify(selectedReference?.correct_answer ?? selectedSeed?.answer_json?.correct_answer ?? "Not recorded")],
   ] : [];
   const selectedPaperItem = paperComparison?.items[selectedPaperComparisonIndex];
   const selectedPaperReference = selectedPaperItem?.reference;

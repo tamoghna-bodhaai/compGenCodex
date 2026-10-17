@@ -47,12 +47,13 @@ class SubtopicPlanItem(BaseModel):
     generation_mode: GenerationMode | None = None
     variation_strength: VariationStrength | None = None
     seed_question_ids: list[str] = Field(default_factory=list)
+    bank_question_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def plan_distributions_have_equal_totals(self) -> "SubtopicPlanItem":
         type_total = sum(item.count for item in self.question_types)
         difficulty_total = sum(item.count for item in self.difficulty_distribution)
-        if not type_total:
+        if not type_total and not self.bank_question_ids:
             raise ValueError("each subtopic plan needs at least one question")
         if type_total != difficulty_total:
             raise ValueError("each subtopic plan needs equal question-type and difficulty totals")

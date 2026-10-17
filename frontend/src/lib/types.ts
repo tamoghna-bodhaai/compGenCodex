@@ -11,9 +11,9 @@ export interface TeacherAccount extends SessionAccount {
   metrics: { papers_created: number; papers_generated: number; tests_created: number; tests_published: number; classes_created: number; students_enrolled: number };
 }
 export interface Classroom { id: string; name: string; students: SessionAccount[] }
-export interface CbtTest { id: string; paper_id: string; title: string; status: string; duration_seconds: number; opens_at: string | null; closes_at: string | null; max_attempts: number; results_policy: { mode: string; release_at?: string }; question_count: number; version: number; assignment_count: number; assignments?: Array<{ class_id: string | null; student_id: string | null }>; questions?: CbtQuestion[]; availability?: string; attempts_remaining?: number; latest_attempt?: CbtAttempt | null }
+export interface CbtTest { id: string; paper_id: string; title: string; status: string; duration_seconds: number; opens_at: string | null; closes_at: string | null; max_attempts: number; results_policy: { mode: string; release_at?: string }; question_count: number; version: number; assignment_count: number; assignments?: Array<{ class_id: string | null; student_id: string | null }>; versions?: Array<{ id: string; ordinal: number; published_at: string }>; accommodations?: Array<{ student_id: string; extra_seconds: number }>; linked_pair?: { id: string; first_test_id: string; second_test_id: string } | null; linked_summary?: { first_title: string; second_title: string; combined_score: number }; questions?: CbtQuestion[]; availability?: string; attempts_remaining?: number; latest_attempt?: CbtAttempt | null }
 export interface CbtQuestion { id: string; section: string | null; kind: QuestionType; stem: string; options: string[]; diagrams: Array<{ id: string; url: string; option_index: number | null; description: string }>; response_spec: ResponseSpec; scoring: { full: number; negative: number; zero: number; partial?: Record<string, number> }; answer?: unknown; solution?: string }
-export interface CbtAttempt { id: string; test_id: string; started_at: string; ends_at: string; submitted_at: string | null; score: number | null; revision: number; questions: CbtQuestion[]; responses: Record<string, { answer: unknown; marked_for_review: boolean }> }
+export interface CbtAttempt { id: string; test_id: string; started_at: string; ends_at: string; submitted_at: string | null; score: number | null; revision: number; server_time?: string; questions: CbtQuestion[]; responses: Record<string, { answer: unknown; marked_for_review: boolean }> }
 
 export interface GenerationJob {
   id: string;
@@ -96,7 +96,7 @@ export interface PaperQuestion {
   section_id: string | null;
   position: number;
   question_json: QuestionJson;
-  answer_json: { correct_answer?: string | null } | null;
+  answer_json: { correct_answer?: string | string[] | Record<string, string> | number | null } | null;
   solution: string | null;
   question_type: QuestionType;
   difficulty: number;
@@ -159,6 +159,7 @@ export interface SubtopicPlanPayload {
   generation_mode: GenerationMode;
   variation_strength: VariationStrength;
   seed_question_ids?: string[];
+  bank_question_ids?: string[];
 }
 
 export interface GenerationConfig {
@@ -192,6 +193,7 @@ export interface PaperSummary {
 }
 
 export interface Paper extends PaperSummary {
+  remaining_generation_count?: number;
   generation_config: GenerationConfig;
   branding_config: BrandingConfig;
   branding_template_id?: string | null;
@@ -208,6 +210,25 @@ export interface CatalogRow {
   question_type: QuestionType;
   difficulty: number;
   count: number;
+}
+
+export interface GlobalBankSource {
+  source_job_id: string | null;
+  source_name: string;
+  question_count: number;
+  source_question_count: number | null;
+  missing_answer_count: number;
+  missing_solution_count: number;
+}
+
+export interface GlobalBank {
+  id: string;
+  name: string;
+  status: string;
+  question_count: number;
+  missing_answer_count: number;
+  missing_solution_count: number;
+  sources: GlobalBankSource[];
 }
 
 export interface SeedQuestion {
@@ -334,6 +355,8 @@ export interface CreationPlan {
   variation_strength: VariationStrength;
   sectionTitle: string;
   seedQuestionIds: string[];
+  bankQuestionIds: string[];
+  generateVariations: boolean;
 }
 
 export interface CreationState {
@@ -358,6 +381,8 @@ export interface QuestionDraft {
   solution: string;
   section_id: string;
   custom_instruction: string;
+  responseSpec: ResponseSpec;
+  partialRules: string;
 }
 
 export interface BankSelection {

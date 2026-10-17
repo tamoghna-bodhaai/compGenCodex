@@ -92,6 +92,9 @@ class PaperService:
 
     def create(self, request: PaperCreateRequest) -> dict:
         self._validate_selected_seed_questions(request)
+        titles = [plan.resolved_section_title() for plan in request.subtopic_plans or []]
+        if len(titles) != len(set(titles)):
+            raise PaperConflictError("Section titles must be unique.")
         paper_id = str(uuid.uuid4())
         now = _now()
         with get_connection() as connection:
@@ -99,25 +102,35 @@ class PaperService:
                 "INSERT INTO papers (id, title, exam, subject, generation_config, branding_config, branding_template_id, status, created_at, updated_at, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (paper_id, request.title, request.exam, request.subject, request.model_dump_json(), "{}", None, "draft", now, now, (current_user_context.get() or {}).get("id")),
             )
-        if request.subtopic_plans:
-            self._ensure_plan_sections(paper_id, request)
+        try:
+            sections = self._ensure_plan_sections(paper_id, request)
+            for plan in request.subtopic_plans or []:
+                for question_id in plan.bank_question_ids:
+                    self.add_bank_question(paper_id, question_id, sections[plan.resolved_section_title()])
+            if request.subtopic_plans and not request.requested_total():
+                self.update(paper_id, PaperUpdateRequest(status="generated"))
+        except Exception:
+            self.delete(paper_id)
+            raise
         return self.get(paper_id)
 
     @staticmethod
     def _validate_selected_seed_questions(request: GenerationRequest) -> None:
         """Reject missing or out-of-scope teacher-selected seed IDs."""
         for plan in request.subtopic_plans or []:
-            if not plan.seed_question_ids:
+            ids = plan.seed_question_ids + plan.bank_question_ids
+            if not ids:
                 continue
-            if len(set(plan.seed_question_ids)) != len(plan.seed_question_ids):
+            if len(set(plan.seed_question_ids)) != len(plan.seed_question_ids) or len(set(plan.bank_question_ids)) != len(plan.bank_question_ids):
                 raise PaperConflictError("A section cannot select the same source question more than once.")
-            placeholders = ",".join("?" for _ in plan.seed_question_ids)
+            ids = list(dict.fromkeys(ids))
+            placeholders = ",".join("?" for _ in ids)
             with get_connection() as connection:
                 rows = connection.execute(
                     f"SELECT id, exam, subject, chapter, topic, subtopic, published FROM questions WHERE id IN ({placeholders})",
-                    plan.seed_question_ids,
+                    ids,
                 ).fetchall()
-            if len(rows) != len(plan.seed_question_ids):
+            if len(rows) != len(ids):
                 raise PaperConflictError("One or more selected source questions are no longer available.")
             for row in rows:
                 actor = current_user_context.get()
@@ -158,6 +171,7 @@ class PaperService:
         paper["questions"] = questions
         paper["question_count"] = len(questions)
         paper["requested_question_count"] = self._requested_total(paper["generation_config"])
+        paper["remaining_generation_count"] = self._remaining_generation_count(paper)
         paper["generation_job"] = self._latest_generation_job(paper_id)
         return paper
 
@@ -261,12 +275,17 @@ class PaperService:
         if source is None or (actor and actor["role"] != "admin" and not source["published"]):
             raise PaperNotFoundError("Bank question not found")
         seed = decode_question_row(source)
+        if seed.get("marks") is not None and "marks" not in seed["question_json"]:
+            seed["question_json"]["marks"] = seed["marks"]
+        group = seed.get("question_group")
+        if group and group.get("shared_stem") and group["shared_stem"] not in seed["question_json"].get("stem", ""):
+            seed["question_json"]["stem"] = group["shared_stem"] + "\n\n" + seed["question_json"]["stem"]
         question_id, now = str(uuid.uuid4()), _now()
         with get_connection() as connection:
             position = self._next_question_position(connection, paper_id, section_id)
             connection.execute(
                 "INSERT INTO paper_questions(id,paper_id,section_id,position,question_json,answer_json,solution,question_type,difficulty,locked,generation_metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?)",
-                (question_id,paper_id,section_id,position,json.dumps(seed["question_json"]),json.dumps(seed["answer_json"]) if seed.get("answer_json") else None,seed.get("solution"),seed["question_type"],seed["difficulty"],json.dumps({"origin":"bank","seed_question_id":seed_question_id,"response_spec":seed.get("response_spec"),"exam_format":seed.get("exam_format")}),now,now),
+                (question_id,paper_id,section_id,position,json.dumps(seed["question_json"]),json.dumps(seed["answer_json"]) if seed.get("answer_json") else None,seed.get("solution"),seed["question_type"],seed["difficulty"],json.dumps({"origin":"bank","seed_question_id":seed_question_id,"response_spec":seed.get("response_spec"),"exam_format":seed.get("exam_format") or {"exam":seed["exam"], "subject":seed["subject"]},"question_group":group,"source_reference":seed.get("source_reference")}),now,now),
             )
         for diagram in diagrams_for(owner_column="seed_question_id", owner_id=seed_question_id):
             path = asset_path(diagram)
@@ -288,11 +307,23 @@ class PaperService:
             value = getattr(request, key)
             if value is not None:
                 question_json[key] = value
-        if current["question_type"] == "single_correct_mcq" and len(question_json.get("options", [])) != 4:
-            raise PaperConflictError("Single-correct MCQs must retain exactly four options.")
+        if current["question_type"] in {"single_correct_mcq", "multiple_correct_mcq"} and ((current.get("generation_metadata") or {}).get("response_spec") or {}).get("mode", "select") == "select" and len(question_json.get("options", [])) < 2:
+            raise PaperConflictError("Choice questions must retain at least two options.")
         updates: dict[str, Any] = {"question_json": json.dumps(question_json), "updated_at": _now()}
         if request.correct_answer is not None:
             updates["answer_json"] = json.dumps({"correct_answer": request.correct_answer})
+        if request.response_spec is not None:
+            from app.schemas.assessment import ResponseSpec
+            try:
+                response_spec = ResponseSpec.model_validate(request.response_spec)
+            except ValueError as error:
+                raise PaperConflictError("Invalid CBT response or marking rules.") from error
+            marking = response_spec.marking
+            if (marking.full is not None and marking.full <= 0) or (marking.negative is not None and marking.negative > 0):
+                raise PaperConflictError("Full marks must be positive and negative marks must be zero or negative.")
+            metadata = current.get("generation_metadata") or {}
+            metadata["response_spec"] = response_spec.model_dump()
+            updates["generation_metadata"] = json.dumps(metadata)
         if request.solution is not None:
             updates["solution"] = request.solution
         if request.difficulty is not None:
@@ -467,7 +498,8 @@ class PaperService:
         request = self._core_generation_request(paper["generation_config"])
         slots = request.build_slots()
         completed_slots = self._completed_initial_slots(paper) & {slot.slot for slot in slots}
-        if paper["questions"] and len(completed_slots) != len(paper["questions"]):
+        curated = [q for q in paper["questions"] if (q.get("generation_metadata") or {}).get("origin") != "bank"]
+        if curated and len(completed_slots) != len(curated):
             raise PaperConflictError("This paper contains manually curated questions. Use selected or unlocked regeneration instead.")
         missing_slots = [slot for slot in slots if slot.slot not in completed_slots]
         if not missing_slots:
@@ -628,7 +660,8 @@ class PaperService:
             request = self._core_generation_request(paper["generation_config"])
             all_slots = request.build_slots()
             completed_slots = self._completed_initial_slots(paper) & {slot.slot for slot in all_slots}
-            if paper["questions"] and len(completed_slots) != len(paper["questions"]):
+            curated = [q for q in paper["questions"] if (q.get("generation_metadata") or {}).get("origin") != "bank"]
+            if curated and len(completed_slots) != len(curated):
                 raise PaperConflictError("This paper contains manually curated questions. Use selected or unlocked regeneration instead.")
             missing_slots = [slot for slot in all_slots if slot.slot not in completed_slots]
             section_ids = self._ensure_plan_sections(paper_id, request)
@@ -640,7 +673,7 @@ class PaperService:
                 # Sectioned plans keep each subtopic's questions grouped under
                 # its own heading; position stays global so ordering is stable.
                 await self._store_generated_result(
-                    paper_id, result, section_id=section_ids.get(result.slot.section_title or ""), position=result.slot.slot,
+                    paper_id, result, section_id=section_ids.get(result.slot.section_title or ""),
                 )
                 emit_event(job_id=job_id, paper_id=paper_id, operation="initial", phase="persistence", outcome="accepted", slot=result.slot.slot, attempt=result.generation_attempt)
                 job = self._generation_job(job_id)
@@ -986,6 +1019,8 @@ class PaperService:
         locked = [question_id for question_id in question_ids if current_by_id[question_id]["locked"]]
         if locked:
             raise PaperConflictError("Locked questions cannot be regenerated. Unlock them first.")
+        if any((current_by_id[q].get("generation_metadata") or {}).get("origin") == "bank" for q in question_ids):
+            raise PaperConflictError("Exact bank questions cannot be regenerated; select a generated question instead.")
         request = GenerationRequest.model_validate(paper["generation_config"])
         configured_slots = {slot.slot: slot for slot in request.build_slots()}
         service = generation_service or GenerationService()
@@ -1017,7 +1052,7 @@ class PaperService:
 
     async def regenerate_unlocked(self, paper_id: str, generation_service: GenerationService | None = None) -> dict:
         paper = self.get(paper_id)
-        question_ids = [question["id"] for question in paper["questions"] if not question["locked"]]
+        question_ids = [question["id"] for question in paper["questions"] if not question["locked"] and (question.get("generation_metadata") or {}).get("origin") != "bank"]
         if not question_ids:
             raise PaperConflictError("There are no unlocked questions to regenerate.")
         return await self.regenerate_questions(paper_id, question_ids, generation_service)
@@ -1026,8 +1061,16 @@ class PaperService:
     def _requested_total(config: dict) -> int:
         plans = config.get("subtopic_plans")
         if plans:
-            return sum(sum(item.get("count", 0) for item in plan.get("question_types", [])) for plan in plans)
+            return sum(len(plan.get("bank_question_ids", [])) + sum(item.get("count", 0) for item in plan.get("question_types", [])) for plan in plans)
         return sum(item.get("count", 0) for item in config.get("question_types", []))
+
+    @staticmethod
+    def _remaining_generation_count(paper: dict) -> int:
+        try:
+            slots = PaperService._core_generation_request(paper["generation_config"]).build_slots()
+        except ValueError:
+            return 0
+        return len({slot.slot for slot in slots} - PaperService._completed_initial_slots(paper))
 
     def _ensure_plan_sections(self, paper_id: str, request: GenerationRequest) -> dict[str, str]:
         """Create one section per subtopic plan and return title -> section id."""

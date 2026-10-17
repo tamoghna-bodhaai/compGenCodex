@@ -128,6 +128,40 @@ The backend is intentionally private behind the frontend proxy. Keep the API
 at one replica while it uses the persistent SQLite volume, and back up the
 database and media together.
 
+### CBT rules and recovery
+
+The optional **JEE Main 2026 Paper 1** publishing template checks the
+official 75-question, three-subject distribution and the 180-minute duration,
+and snapshots +4/−1 marking and integer numerical responses. Source:
+[NTA 2026 information bulletin](https://jeemain.nta.nic.in/document/ib-2026/).
+Custom and Advanced papers use the reviewed response and marking rules on
+each question. Link two published tests in **Tests & classes** for a two-paper
+practice score; assign both separately. Extra time applies to new attempts
+and cannot extend the test's closing time.
+
+New question diagrams and immutable CBT media are saved under the database
+directory's `media` folder. Older question diagrams may still live in
+`backend/data/media/diagrams`; preserve that directory when upgrading.
+For a consistent backup, stop the API and all other writers, then run:
+
+```bash
+python scripts/backup_assessment_data.py \
+  --database /data/db/question_generator.db \
+  --legacy-media /path/to/legacy/diagrams \
+  --exports /data/exports --output /secure/location/assessment-backup.zip
+```
+
+The archive includes a checked SQLite snapshot, media, optional legacy
+diagrams and exports, and a manifest of SHA-256 checksums. It contains
+student data; restrict access and store a protected copy elsewhere. Rehearse
+recovery on a separate staging service: stop its writers, verify the
+manifest hashes, and restore `database.sqlite3` and each archive directory to
+the original paths recorded in `manifest.json`. Restore the application
+configuration separately. Keep the current files until the restored service
+has passed an integrity check and a sample test attempt. The operations
+panel exposes recent assessment events and a database check; it does not
+replace external monitoring, alerting, or tested disaster recovery.
+
 ## Paper Studio frontend
 
 The TypeScript Next.js application in `frontend/` lets an authorized user:

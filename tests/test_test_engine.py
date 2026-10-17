@@ -18,7 +18,7 @@ from app.api.auth import create_teacher, delete_teacher, teachers, login, update
 from app.schemas.auth import LoginRequest
 from app.api.assessments import create_class, add_student, publish_paper, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
 from app.services.assessment import score_item, snapshot_item
-from app.api.banks import publish_bank, BankPublish
+from app.api.banks import publish_bank, list_banks, BankPublish
 from app.api.questions import list_questions
 from app.services.seed_import import upsert_seed_questions
 from app.services.papers import PaperService
@@ -278,6 +278,33 @@ class TestEngineTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as forbidden:
             publish_bank("legacy", BankPublish(question_ids=[ids[1]], allow_missing_answers=True), self.request(teacher))
         self.assertEqual(forbidden.exception.status_code, 403)
+
+    def test_bank_tracking_counts_published_sources_and_updates_with_answers(self):
+        source = Path(__file__).resolve().parents[1] / "sample_data" / "jee_definite_integrals_questions.json"
+        upsert_seed_questions(source)
+        with get_connection() as connection:
+            connection.execute("INSERT INTO ingestion_jobs(id,source_name,state,phase,created_at,updated_at) VALUES ('source-a','Gravitation.pdf','succeeded','complete','2020','2020'), ('source-b','Energy.pdf','succeeded','complete','2020','2020')")
+            ids = [row["id"] for row in connection.execute("SELECT id FROM questions LIMIT 5")]
+            for identifier in ids[:3]:
+                connection.execute("UPDATE questions SET source_job_id='source-a', answer_json=?, solution='Worked' WHERE id=?", (json.dumps({"correct_answer":"A"}), identifier))
+            connection.execute("UPDATE questions SET answer_json=NULL, solution=NULL WHERE id=?", (ids[1],))
+            connection.execute("UPDATE questions SET source_job_id='source-b', answer_json=?, solution='Worked' WHERE id=?", (json.dumps({"correct_answer":"B"}), ids[3]))
+            connection.execute("UPDATE questions SET source_job_id=NULL, source='Manual', answer_json=?, solution=NULL WHERE id=?", (json.dumps({"correct_answer":"C"}), ids[4]))
+        publish_bank("legacy", BankPublish(question_ids=[ids[0],ids[1],ids[3],ids[4]], allow_missing_answers=True), self.request(self.admin))
+        bank = next(item for item in list_banks(self.request(self.admin))["items"] if item["id"] == "legacy")
+        self.assertEqual((bank["question_count"],bank["missing_answer_count"],bank["missing_solution_count"]), (4,1,2))
+        sources = {item["source_name"]: item for item in bank["sources"]}
+        self.assertEqual((sources["Gravitation.pdf"]["question_count"],sources["Gravitation.pdf"]["source_question_count"],sources["Gravitation.pdf"]["missing_answer_count"]), (2,3,1))
+        self.assertEqual(sources["Energy.pdf"]["question_count"], 1)
+        self.assertIsNone(sources["Manual"]["source_job_id"])
+
+        with get_connection() as connection:
+            connection.execute("UPDATE questions SET answer_json=?, solution='Worked' WHERE id=?", (json.dumps({"correct_answer":"A"}), ids[1]))
+        updated = next(item for item in list_banks(self.request(self.admin))["items"] if item["id"] == "legacy")
+        self.assertEqual((updated["missing_answer_count"],updated["missing_solution_count"]), (0,1))
+        teacher = create_teacher(AccountCreate(name="Teacher",email="teacher@example.com",access_code="22222"),self.request(self.admin))
+        visible = next(item for item in list_banks(self.request(teacher))["items"] if item["id"] == "legacy")
+        self.assertNotIn("sources", visible)
 
     def test_populated_legacy_database_gains_owner_without_losing_rows(self):
         path = Path(self.temp.name) / "legacy.db"

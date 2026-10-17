@@ -32,6 +32,15 @@ describe("paper creation payload", () => {
     creation.plans[creation.subtopicKeys[0]] = { ...defaultPlan(), seedQuestionIds: ["seed-a", "seed-b"] };
     expect(buildCreationPayload(creation).subtopic_plans[0]).toMatchObject({ seed_question_ids: ["seed-a", "seed-b"] });
   });
+
+  it("retains exact selections for a topic-only bank paper without variations", () => {
+    const creation = defaultCreation();
+    creation.subtopicKeys = ["Integrals::"];
+    creation.plans[creation.subtopicKeys[0]] = { ...defaultPlan(), bankQuestionIds: ["q1", "q2"], generateVariations: false };
+    const payload = buildCreationPayload(creation);
+    expect(payload.usesTopicOnlyRequest).toBe(false);
+    expect(payload.subtopic_plans[0]).toMatchObject({ section_title: "Integrals", bank_question_ids: ["q1", "q2"], question_types: [], difficulty_distribution: [] });
+  });
 });
 
 describe("dashboard state", () => {

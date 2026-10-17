@@ -13,10 +13,14 @@ from typing import Any
 from PIL import Image
 
 from app.core.settings import Settings, get_settings
-from app.db.database import ROOT_DIR, get_connection
+from app.db.database import ROOT_DIR, database_path, get_connection
 from app.services.openrouter import ModelConfigurationError, OpenRouterClient, OpenRouterError
 
 MEDIA_DIR = ROOT_DIR / "backend" / "data" / "media" / "diagrams"
+
+
+def persistent_media_dir() -> Path:
+    return database_path().resolve().parent / "media" / "diagrams"
 
 
 def _now() -> str:
@@ -73,10 +77,11 @@ def store_diagram(*, owner_column: str, owner_id: str, provenance: str, data: by
     if data:
         normalized, mime, width, height = _asset_info(data)
         digest = hashlib.sha256(normalized).hexdigest()
-        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-        target = MEDIA_DIR / f"{diagram_id}.png"
+        media_dir = persistent_media_dir()
+        media_dir.mkdir(parents=True, exist_ok=True)
+        target = media_dir / f"{diagram_id}.png"
         target.write_bytes(normalized)
-        path = str(target.relative_to(ROOT_DIR))
+        path = str(target)
     with get_connection() as connection:
         connection.execute(
             f"INSERT INTO question_diagrams (id, {owner_column}, storage_path, mime_type, width, height, sha256, provenance, source_page, crop_json, description, render_spec, generation_prompt, model, validation_status, validation_notes, option_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -103,9 +108,7 @@ def asset_path(diagram: dict) -> Path | None:
     if not raw:
         return None
     target = (ROOT_DIR / raw).resolve()
-    try:
-        target.relative_to(MEDIA_DIR.resolve())
-    except ValueError:
+    if not any(target.is_relative_to(root.resolve()) for root in (MEDIA_DIR, persistent_media_dir())):
         return None
     return target if target.is_file() else None
 

@@ -12,6 +12,16 @@
 .listButton { width: 100%; cursor: pointer; }
 .listButton:hover { border-color: var(--accent); background: var(--accent-soft); }
 .bank,.detail { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 8px; display: grid; gap: 12px; }
+.bankTitle { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.bankTracking { display: grid; gap: 10px; }
+.bankTracking h3 { font-size: 14px; }
+.bankMetrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.bankMetrics span { border: 1px solid var(--line); border-radius: 8px; padding: 9px; color: var(--muted); font-size: 12px; }
+.bankMetrics strong { display: block; color: var(--ink); font-size: 17px; }
+.publishedSources { display: grid; gap: 8px; max-height: 260px; overflow-y: auto; }
+.publishedSource { border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-wrap: anywhere; font-size: 13px; }
+.publishedSource a { font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.publishedSource p { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .check { display: flex; gap: 9px; align-items: center; font-size: 14px; }
 .error { color: var(--danger); background: var(--danger-soft); padding: 12px 14px; border-radius: 8px; }
 .notice { color: #166534; background: #dcfce7; padding: 12px 14px; border-radius: 8px; }
@@ -36,5 +46,11 @@
 .numberGrid button { width: 38px; height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); cursor: pointer; }
 .numberGrid .activeNumber { background: var(--accent); color: white; }
 .numberGrid .savedNumber { border-color: var(--success); color: var(--success); }
+.numberGrid button[data-status="Unanswered"] { background: #fee2e2; color: #991b1b; }
+.numberGrid button[data-status="Answered"] { background: #dcfce7; color: #166534; }
+.numberGrid button[data-status="Marked for review"] { background: #ede9fe; color: #5b21b6; }
+.numberGrid button[data-status="Answered and marked for review"] { background: #5b21b6; color: white; }
+.numberGrid button.activeNumber { outline: 3px solid var(--accent); outline-offset: 2px; }
+.paletteStatus { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .linkButton { background: var(--accent); color: white; padding: 10px 15px; border-radius: 8px; width: fit-content; }
 @media(max-width:700px) { .page { padding: 20px 16px 40px; } .grid { grid-template-columns: 1fr; } .row { flex-wrap: wrap; } }

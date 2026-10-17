@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import HTTPException, Request, Response
@@ -62,6 +63,21 @@ class AuthenticationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             login(LoginRequest(email="other@bodhaai.tech", access_code="12345"), Response())
         self.assertEqual(raised.exception.status_code, 401)
+
+    def test_parallel_invalid_sign_ins_respect_the_account_limit(self) -> None:
+        login(LoginRequest(email="utils@bodhaai.tech", access_code="12345"), Response())
+
+        def attempt(_: int) -> int:
+            try:
+                login(LoginRequest(email="utils@bodhaai.tech", access_code="00000"), Response())
+                return 200
+            except HTTPException as error:
+                return error.status_code
+
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            outcomes = list(pool.map(attempt, range(15)))
+        self.assertEqual(outcomes.count(401), 10)
+        self.assertEqual(outcomes.count(429), 5)
 
     def test_logout_clears_the_cookie(self) -> None:
         response = Response()

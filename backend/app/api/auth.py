@@ -44,20 +44,22 @@ def login(payload: LoginRequest, response: Response) -> SessionResponse:
     email = payload.email.strip().lower()
     now = int(time.time())
     with get_connection() as connection:
+        # Reserve an attempt before checking the password so parallel requests
+        # cannot all pass the limit before their failures are recorded.
+        connection.execute("BEGIN IMMEDIATE")
         attempt = connection.execute("SELECT failed_count,window_start FROM auth_login_attempts WHERE email=?", (email,)).fetchone()
         if attempt and attempt["window_start"] + 300 > now and attempt["failed_count"] >= 10:
             raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again later.")
+        if not attempt or attempt["window_start"] + 300 <= now:
+            connection.execute("INSERT INTO auth_login_attempts(email,failed_count,window_start) VALUES (?,1,?) ON CONFLICT(email) DO UPDATE SET failed_count=1,window_start=excluded.window_start", (email,now))
+        else:
+            connection.execute("UPDATE auth_login_attempts SET failed_count=failed_count+1 WHERE email=?", (email,))
     user = account_for_email(email)
     valid = bool(user and user["status"] == "active" and not user.get("deleted_at") and (
         credentials_are_valid(payload.email, payload.access_code, settings)
         if user["role"] == "admin" else verify_access_code(payload.access_code, user["access_code_hash"])
     ))
     if not valid:
-        with get_connection() as connection:
-            if not attempt or attempt["window_start"] + 300 <= now:
-                connection.execute("INSERT INTO auth_login_attempts(email,failed_count,window_start) VALUES (?,1,?) ON CONFLICT(email) DO UPDATE SET failed_count=1,window_start=excluded.window_start", (email,now))
-            else:
-                connection.execute("UPDATE auth_login_attempts SET failed_count=failed_count+1 WHERE email=?", (email,))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or access code.")
     with get_connection() as connection:
         connection.execute("DELETE FROM auth_login_attempts WHERE email=?", (email,))

@@ -306,6 +306,25 @@ CREATE TABLE IF NOT EXISTS test_assignments (
     CHECK ((student_id IS NOT NULL) != (class_id IS NOT NULL)),
     UNIQUE(test_id,student_id), UNIQUE(test_id,class_id)
 );
+CREATE TABLE IF NOT EXISTS test_accommodations (
+    test_id TEXT NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+    student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    extra_seconds INTEGER NOT NULL DEFAULT 0 CHECK(extra_seconds >= 0),
+    PRIMARY KEY(test_id,student_id)
+);
+CREATE TABLE IF NOT EXISTS linked_test_pairs (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES users(id),
+    first_test_id TEXT NOT NULL UNIQUE REFERENCES tests(id) ON DELETE CASCADE,
+    second_test_id TEXT NOT NULL UNIQUE REFERENCES tests(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    CHECK(first_test_id != second_test_id)
+);
+CREATE TABLE IF NOT EXISTS assessment_audit (
+    id TEXT PRIMARY KEY, actor_id TEXT REFERENCES users(id), action TEXT NOT NULL,
+    resource_id TEXT NOT NULL, created_at TEXT NOT NULL, details TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS assessment_audit_created_idx ON assessment_audit(created_at DESC);
 CREATE TABLE IF NOT EXISTS test_attempts (
     id TEXT PRIMARY KEY, test_id TEXT NOT NULL REFERENCES tests(id),
     version_id TEXT NOT NULL REFERENCES test_versions(id),

@@ -91,7 +91,8 @@ class AddBankQuestionRequest(BaseModel):
 class QuestionEditRequest(BaseModel):
     stem: str | None = Field(default=None, min_length=1)
     options: list[str] | None = None
-    correct_answer: str | None = None
+    correct_answer: Any | None = None
+    response_spec: dict[str, Any] | None = None
     solution: str | None = None
     difficulty: int | None = Field(default=None, ge=1, le=5)
     marks: int | None = Field(default=None, ge=1, le=100)

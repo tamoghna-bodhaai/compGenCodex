@@ -34,6 +34,8 @@ export const defaultPlan = (): CreationPlan => ({
   variation_strength: "balanced",
   sectionTitle: "",
   seedQuestionIds: [],
+  bankQuestionIds: [],
+  generateVariations: true,
 });
 
 export const defaultCreation = (): CreationState => ({
@@ -70,12 +72,13 @@ export function buildCreationPayload(creation: CreationState) {
       topic,
       ...(subtopic ? { subtopic } : {}),
       chapters: creation.chapters,
-      section_title: plan.sectionTitle.trim() || `${topic} › ${subtopic}`,
-      question_types: QUESTION_TYPES.map(([type]) => ({ type, count: Number(plan.questionCounts[type]) || 0 })).filter((item) => item.count > 0),
-      difficulty_distribution: DIFFICULTIES.map(([planKey, , difficulty]) => ({ difficulty, count: Number(plan.difficultyCounts[planKey]) || 0 })).filter((item) => item.count > 0),
+      section_title: plan.sectionTitle.trim() || (subtopic ? `${topic} › ${subtopic}` : topic),
+      question_types: plan.generateVariations ? QUESTION_TYPES.map(([type]) => ({ type, count: Number(plan.questionCounts[type]) || 0 })).filter((item) => item.count > 0) : [],
+      difficulty_distribution: plan.generateVariations ? DIFFICULTIES.map(([planKey, , difficulty]) => ({ difficulty, count: Number(plan.difficultyCounts[planKey]) || 0 })).filter((item) => item.count > 0) : [],
       generation_mode: plan.generation_mode,
       variation_strength: plan.variation_strength,
       ...(plan.seedQuestionIds.length ? { seed_question_ids: plan.seedQuestionIds } : {}),
+      ...(plan.bankQuestionIds.length ? { bank_question_ids: plan.bankQuestionIds } : {}),
     };
   });
   const typeTotals = new Map<QuestionType, number>();
@@ -87,7 +90,7 @@ export function buildCreationPayload(creation: CreationState) {
   // Older API deployments require subtopic_plans[].subtopic even though a
   // topic-only seed bank is valid. A single topic-only selection can use the
   // original top-level request shape, which both API versions understand.
-  const usesTopicOnlyRequest = subtopic_plans.length === 1 && !subtopic_plans[0].subtopic;
+  const usesTopicOnlyRequest = subtopic_plans.length === 1 && !subtopic_plans[0].subtopic && !subtopic_plans[0].bank_question_ids?.length;
   return {
     title: creation.title.trim(), exam: creation.exam, subject: creation.subject, chapters: creation.chapters,
     topics: [...new Set(subtopic_plans.map((item) => item.topic).filter(Boolean))],
