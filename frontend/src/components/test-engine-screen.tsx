@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
-import type { CbtAttempt, CbtQuestion, CbtTest, Classroom, IngestionJob, SessionAccount } from "@/lib/types";
+import { ApiError, api } from "@/lib/api";
+import type { CbtAttempt, CbtQuestion, CbtTest, Classroom, IngestionJob, SessionAccount, TeacherAccount } from "@/lib/types";
 import { Button, Field, Input, PageHeader, Select } from "@/components/ui";
 import { MathContent } from "@/components/math-content";
 import s from "@/styles/test-engine.module.css";
@@ -13,17 +13,38 @@ function message(error: unknown) { return error instanceof Error ? error.message
 function date(value: string | null | undefined) { return value ? new Date(value).toLocaleString() : "Any time"; }
 
 export function AdminScreen() {
-  const [teachers, setTeachers] = useState<SessionAccount[]>([]);
+  const [teachers, setTeachers] = useState<TeacherAccount[]>([]);
   const [banks, setBanks] = useState<Array<{ id: string; name: string; status: string; question_count: number }>>([]);
   const [sources, setSources] = useState<IngestionJob[]>([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { const [people, collections, jobs] = await Promise.all([api.teachers(), api.banks(), api.ingestionJobs()]); setTeachers(people.items); setBanks(collections.items); setSources(jobs.items.filter(job => job.state === "succeeded")); }, []);
+  const refreshTeachers = useCallback(async () => { const people = await api.teachers(); setTeachers(people.items); }, []);
+  const load = useCallback(async () => {
+    const [people, collections, jobs] = await Promise.allSettled([api.teachers(), api.banks(), api.ingestionJobs()]);
+    if (people.status === "fulfilled") setTeachers(people.value.items);
+    if (collections.status === "fulfilled") setBanks(collections.value.items);
+    if (jobs.status === "fulfilled") setSources(jobs.value.items.filter(job => job.state === "succeeded"));
+    const failure = [people, collections, jobs].find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }, []);
   useEffect(() => { void load().catch(e => setError(message(e))); }, [load]);
   async function createTeacher(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError("");
-    const body = Object.fromEntries(new FormData(event.currentTarget));
-    try { await api.createTeacher(body); event.currentTarget.reset(); await load(); } catch (e) { setError(message(e)); } finally { setBusy(false); }
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form));
+    setNotice("");
+    try {
+      await api.createTeacher(body);
+      form.reset();
+      setNotice("Teacher added successfully.");
+      try { await refreshTeachers(); } catch { setNotice("Teacher added. Refresh the page to view the updated list."); }
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        await refreshTeachers().catch(() => undefined);
+      }
+      setError(message(e));
+    } finally { setBusy(false); }
   }
   async function createBank(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError("");
@@ -37,17 +58,24 @@ export function AdminScreen() {
     const question_ids = String(values.get("question_ids") || "").split(/[\s,]+/).filter(Boolean);
     try { await api.publishBank(bankId, { source_job_id, question_ids }); event.currentTarget.reset(); await load(); } catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
-  async function manageTeacher(teacher: SessionAccount, action: "status" | "code") {
+  async function manageTeacher(teacher: TeacherAccount, action: "status" | "code") {
     const access_code = action === "code" ? window.prompt(`New five-digit code for ${teacher.name}`) : null;
     if (action === "code" && !access_code) return;
     if (action === "code" && !/^\d{5}$/.test(access_code || "")) { setError("Access codes must be five digits."); return; }
     setBusy(true); setError("");
-    try { await api.updateTeacher(teacher.id, action === "code" ? { access_code } : { status: teacher.status === "active" ? "suspended" : "active" }); await load(); }
+    try { await api.updateTeacher(teacher.id, action === "code" ? { access_code } : { status: teacher.status === "active" ? "suspended" : "active" }); await refreshTeachers(); }
+    catch (e) { setError(message(e)); } finally { setBusy(false); }
+  }
+  async function removeTeacher(teacher: TeacherAccount) {
+    if (!window.confirm(`Remove ${teacher.name}? Their classes, tests, and records will be kept, but they will lose access immediately.`)) return;
+    setBusy(true); setError(""); setNotice("");
+    try { await api.deleteTeacher(teacher.id); await refreshTeachers(); setNotice(`${teacher.name} removed.`); }
     catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
   return <section className={s.page}><PageHeader eyebrow="Super admin" title="People & global banks" description="Review source questions, then publish them for teachers." />
     {error && <p className={s.error} role="alert">{error}</p>}
-    <div className={s.grid}><section className={s.card}><h2>Teachers</h2><form onSubmit={createTeacher} className={s.form}><Field label="Name"><Input name="name" required /></Field><Field label="Email"><Input name="email" type="email" required /></Field><Field label="Five-digit access code"><Input name="access_code" inputMode="numeric" pattern="[0-9]{5}" required /></Field><Button tone="primary" type="submit" disabled={busy}>Add teacher</Button></form><div className={s.list}>{teachers.map(teacher => <div className={s.bank} key={teacher.id}><div className={s.listItem}><strong>{teacher.name}</strong><span>{teacher.email} · {teacher.status}</span></div><div className={s.row}><Button size="small" disabled={busy} onClick={() => void manageTeacher(teacher,"status")}>{teacher.status === "active" ? "Suspend" : "Reactivate"}</Button><Button size="small" disabled={busy} onClick={() => void manageTeacher(teacher,"code")}>Reset code</Button></div></div>)}</div></section>
+    {notice && <p className={s.notice} role="status">{notice}</p>}
+    <div className={s.grid}><section className={s.card}><h2>Teachers</h2><form onSubmit={createTeacher} className={`${s.form} ${s.teacherForm}`}><Field label="Name"><Input name="name" required /></Field><Field label="Email"><Input name="email" type="email" required /></Field><Field label="Five-digit access code"><Input name="access_code" inputMode="numeric" pattern="[0-9]{5}" required /></Field><Button tone="primary" type="submit" disabled={busy}>{busy ? "Saving…" : "Add teacher"}</Button></form><div className={s.list}>{teachers.map(teacher => <div className={s.bank} key={teacher.id}><div className={s.teacherHeading}><strong>{teacher.name}</strong><span className={teacher.status === "active" ? s.activeStatus : s.suspendedStatus}>{teacher.status}</span></div><p className={s.teacherEmail}>{teacher.email}</p><div className={s.teacherMetrics}><span><strong>{teacher.metrics.papers_generated}</strong> generated papers</span><span><strong>{teacher.metrics.tests_published}</strong> published tests</span><span><strong>{teacher.metrics.classes_created}</strong> classes</span><span><strong>{teacher.metrics.students_enrolled}</strong> students</span></div><p className={s.muted}>Total: {teacher.metrics.papers_created} papers · {teacher.metrics.tests_created} tests</p><div className={s.teacherActions}><Button size="small" disabled={busy} onClick={() => void manageTeacher(teacher,"status")}>{teacher.status === "active" ? "Suspend" : "Resume"}</Button><Button size="small" disabled={busy} onClick={() => void manageTeacher(teacher,"code")}>Reset code</Button><Button size="small" disabled={busy} onClick={() => void removeTeacher(teacher)}>Remove</Button></div></div>)}{teachers.length === 0 && <p className={s.muted}>No teachers yet.</p>}</div></section>
     <section className={s.card}><h2>Global question banks</h2><form onSubmit={createBank} className={s.row}><Input name="name" placeholder="Bank name" required /><Button tone="primary" type="submit" disabled={busy}>Create bank</Button></form><p className={s.muted}>Review questions in <Link href="/ingestion">Ingestion</Link>, then publish a completed source or selected question IDs.</p><div className={s.list}>{banks.map(bank => <div className={s.bank} key={bank.id}><div className={s.listItem}><strong>{bank.name}</strong><span>{bank.status} · {bank.question_count} published</span></div><form className={s.form} onSubmit={event => void publish(event, bank.id)}><Select name="source_job_id" defaultValue=""><option value="">Choose a completed source</option>{sources.map(source => <option key={source.id} value={source.id}>{source.source_name}</option>)}</Select><Input name="question_ids" placeholder="Or question IDs, comma separated" /><Button size="small" type="submit" disabled={busy}>Publish reviewed questions</Button></form></div>)}</div></section></div>
   </section>;
 }

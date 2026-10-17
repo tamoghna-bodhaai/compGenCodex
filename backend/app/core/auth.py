@@ -108,7 +108,7 @@ def authenticated_account(token: str | None, settings: AuthSettings) -> dict[str
     if not email:
         return None
     user = account_for_email(email)
-    if not user or user["status"] != "active":
+    if not user or user["status"] != "active" or user.get("deleted_at"):
         return None
     try:
         payload = json.loads(_decode(token.split(".", 1)[0]))

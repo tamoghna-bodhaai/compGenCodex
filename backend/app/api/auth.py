@@ -48,7 +48,7 @@ def login(payload: LoginRequest, response: Response) -> SessionResponse:
         if attempt and attempt["window_start"] + 300 > now and attempt["failed_count"] >= 10:
             raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again later.")
     user = account_for_email(email)
-    valid = bool(user and user["status"] == "active" and (
+    valid = bool(user and user["status"] == "active" and not user.get("deleted_at") and (
         credentials_are_valid(payload.email, payload.access_code, settings)
         if user["role"] == "admin" else verify_access_code(payload.access_code, user["access_code_hash"])
     ))
@@ -105,7 +105,19 @@ def _actor(request: Request, role: str) -> dict:
 def teachers(request: Request) -> dict:
     _actor(request, "admin")
     with get_connection() as connection:
-        return {"items": [public_user(dict(row)) for row in connection.execute("SELECT * FROM users WHERE role='teacher' ORDER BY name")]}
+        rows = connection.execute("""
+            SELECT u.*,
+                (SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id) AS papers_created,
+                (SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id AND p.status IN ('generated','final')) AS papers_generated,
+                (SELECT COUNT(*) FROM tests t WHERE t.owner_id=u.id) AS tests_created,
+                (SELECT COUNT(*) FROM tests t WHERE t.owner_id=u.id AND t.status='published') AS tests_published,
+                (SELECT COUNT(*) FROM classrooms c WHERE c.owner_id=u.id) AS classes_created,
+                (SELECT COUNT(DISTINCT m.student_id) FROM classrooms c JOIN class_memberships m ON m.class_id=c.id WHERE c.owner_id=u.id) AS students_enrolled
+            FROM users u WHERE u.role='teacher' AND u.deleted_at IS NULL ORDER BY u.name
+        """).fetchall()
+        return {"items": [{**public_user(dict(row)), "created_at": row["created_at"],
+                           "metrics": {key: row[key] for key in ("papers_created", "papers_generated", "tests_created", "tests_published", "classes_created", "students_enrolled")}}
+                          for row in rows]}
 
 
 @router.post("/teachers", status_code=201)
@@ -118,7 +130,7 @@ def _create_account(payload: AccountCreate, role: str, owner_id: str | None = No
     email = payload.email.strip().lower()
     with get_connection() as connection:
         if connection.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
-            raise HTTPException(409, "Email already exists")
+            raise HTTPException(409, "Email already exists. Check the teacher list before adding again.")
         identifier = str(uuid.uuid4())
         connection.execute("INSERT INTO users(id,email,name,role,status,access_code_hash,owner_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
                            (identifier,email,payload.name.strip(),role,"active",hash_access_code(payload.access_code),owner_id,datetime.now(UTC).isoformat()))
@@ -128,7 +140,7 @@ def _create_account(payload: AccountCreate, role: str, owner_id: str | None = No
 
 def update_managed_account(identifier: str, payload: AccountUpdate, *, role: str, owner_id: str | None = None) -> dict:
     with get_connection() as connection:
-        row = connection.execute("SELECT * FROM users WHERE id=? AND role=?", (identifier,role)).fetchone()
+        row = connection.execute("SELECT * FROM users WHERE id=? AND role=? AND deleted_at IS NULL", (identifier,role)).fetchone()
         if not row or (owner_id is not None and row["owner_id"] != owner_id):
             raise HTTPException(404, "Account not found")
         updates = payload.model_dump(exclude_none=True)
@@ -146,3 +158,15 @@ def update_managed_account(identifier: str, payload: AccountUpdate, *, role: str
 def update_teacher(teacher_id: str, payload: AccountUpdate, request: Request) -> dict:
     _actor(request, "admin")
     return update_managed_account(teacher_id,payload,role="teacher")
+
+
+@router.delete("/teachers/{teacher_id}", status_code=204)
+def delete_teacher(teacher_id: str, request: Request) -> Response:
+    _actor(request, "admin")
+    with get_connection() as connection:
+        row = connection.execute("SELECT id FROM users WHERE id=? AND role='teacher' AND deleted_at IS NULL", (teacher_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Teacher not found")
+        connection.execute("UPDATE users SET deleted_at=?, status='suspended', session_version=session_version+1 WHERE id=?",
+                           (datetime.now(UTC).isoformat(), teacher_id))
+    return Response(status_code=204)

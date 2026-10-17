@@ -10,7 +10,7 @@ import type {
   SeedComparison,
   PaperExport,
   PaperComparison,
-  SessionAccount, Classroom, CbtTest, CbtAttempt, CbtQuestion,
+  SessionAccount, TeacherAccount, Classroom, CbtTest, CbtAttempt, CbtQuestion,
 } from "@/lib/types";
 
 export class ApiError extends Error {
@@ -66,9 +66,10 @@ export const api = {
   login: (email: string, accessCode: string) => apiRequest<{ authenticated: boolean; user: SessionAccount }>("/auth/login", { method: "POST", body: JSON.stringify({ email, access_code: accessCode }) }),
   logout: () => apiRequest<void>("/auth/logout", { method: "POST" }),
   session: () => apiRequest<{ authenticated: boolean; user: SessionAccount | null }>("/auth/session"),
-  teachers: () => apiRequest<{ items: SessionAccount[] }>("/auth/teachers"),
+  teachers: () => apiRequest<{ items: TeacherAccount[] }>("/auth/teachers"),
   createTeacher: (body: unknown) => apiRequest<SessionAccount>("/auth/teachers", { method: "POST", body: JSON.stringify(body) }),
   updateTeacher: (id: string, body: unknown) => apiRequest<SessionAccount>(`/auth/teachers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteTeacher: (id: string) => apiRequest<void>(`/auth/teachers/${id}`, { method: "DELETE" }),
   banks: () => apiRequest<{ items: Array<{ id: string; name: string; status: string; question_count: number }> }>("/banks"),
   createBank: (name: string) => apiRequest<{ id: string }>("/banks", { method: "POST", body: JSON.stringify({ name }) }),
   publishBank: (id: string, body: unknown) => apiRequest<{ published_count: number }>(`/banks/${id}/publish`, { method: "POST", body: JSON.stringify(body) }),

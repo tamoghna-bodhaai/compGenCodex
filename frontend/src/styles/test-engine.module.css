@@ -14,6 +14,19 @@
 .bank,.detail { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 8px; display: grid; gap: 12px; }
 .check { display: flex; gap: 9px; align-items: center; font-size: 14px; }
 .error { color: var(--danger); background: var(--danger-soft); padding: 12px 14px; border-radius: 8px; }
+.notice { color: #166534; background: #dcfce7; padding: 12px 14px; border-radius: 8px; }
+.teacherForm label span { font-size: 13px; }
+.teacherForm input { font-size: 16px; min-height: 42px; }
+.teacherForm button { font-size: 14px; min-height: 42px; }
+.teacherHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 17px; }
+.activeStatus,.suspendedStatus { font-size: 13px; font-weight: 650; padding: 4px 9px; border-radius: 999px; }
+.activeStatus { color: #166534; background: #dcfce7; }
+.suspendedStatus { color: #991b1b; background: #fee2e2; }
+.teacherEmail { color: var(--muted); font-size: 15px; overflow-wrap: anywhere; }
+.teacherMetrics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.teacherMetrics span { border: 1px solid var(--line); border-radius: 8px; padding: 9px; font-size: 14px; }
+.teacherMetrics strong { font-size: 18px; }
+.teacherActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .options { display: grid; gap: 9px; margin-top: 16px; }
 .option { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; gap: 10px; align-items: start; cursor: pointer; }
 .option img { max-width: 180px; display: block; }

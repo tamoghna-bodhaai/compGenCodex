@@ -6,6 +6,10 @@ export type GenerationMode = "structural_variation" | "concept_variation";
 export type VariationStrength = "close" | "balanced" | "high";
 
 export interface SessionAccount { id: string; email: string; name: string; role: "admin" | "teacher" | "student"; status: string }
+export interface TeacherAccount extends SessionAccount {
+  created_at: string;
+  metrics: { papers_created: number; papers_generated: number; tests_created: number; tests_published: number; classes_created: number; students_enrolled: number };
+}
 export interface Classroom { id: string; name: string; students: SessionAccount[] }
 export interface CbtTest { id: string; paper_id: string; title: string; status: string; duration_seconds: number; opens_at: string | null; closes_at: string | null; max_attempts: number; results_policy: { mode: string; release_at?: string }; question_count: number; version: number; assignment_count: number; assignments?: Array<{ class_id: string | null; student_id: string | null }>; questions?: CbtQuestion[]; availability?: string; attempts_remaining?: number; latest_attempt?: CbtAttempt | null }
 export interface CbtQuestion { id: string; section: string | null; kind: QuestionType; stem: string; options: string[]; diagrams: Array<{ id: string; url: string; option_index: number | null; description: string }>; response_spec: ResponseSpec; scoring: { full: number; negative: number; zero: number; partial?: Record<string, number> }; answer?: unknown; solution?: string }

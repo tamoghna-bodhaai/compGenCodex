@@ -266,7 +266,8 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('admin','teacher','student')),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')),
-    access_code_hash TEXT, owner_id TEXT, session_version INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+    access_code_hash TEXT, owner_id TEXT, session_version INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+    deleted_at TEXT
 );
 CREATE TABLE IF NOT EXISTS auth_login_attempts (
     email TEXT PRIMARY KEY, failed_count INTEGER NOT NULL, window_start INTEGER NOT NULL
@@ -422,6 +423,8 @@ def initialize_database(path: Path | None = None) -> Path:
         user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
         if "owner_id" not in user_columns:
             connection.execute("ALTER TABLE users ADD COLUMN owner_id TEXT")
+        if "deleted_at" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")
         if "session_version" not in user_columns:
             connection.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
         connection.execute("INSERT OR IGNORE INTO question_banks(id,name,status,created_at) VALUES ('legacy','CompGen question bank','draft',CURRENT_TIMESTAMP)")

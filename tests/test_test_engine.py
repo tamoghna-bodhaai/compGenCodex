@@ -14,7 +14,7 @@ from fastapi import Request, Response, HTTPException
 
 from app.core.auth import account_for_email, authenticated_account, create_session, current_user_context, get_auth_settings
 from app.db.database import SQLITE_SCHEMA, get_connection, initialize_database
-from app.api.auth import create_teacher, login, update_teacher, AccountCreate, AccountUpdate
+from app.api.auth import create_teacher, delete_teacher, teachers, login, update_teacher, AccountCreate, AccountUpdate
 from app.schemas.auth import LoginRequest
 from app.api.assessments import create_class, add_student, publish_paper, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
 from app.services.assessment import score_item, snapshot_item
@@ -44,6 +44,25 @@ class TestEngineTests(unittest.TestCase):
         request = Request({"type":"http","method":"GET","path":"/","headers":[]})
         request.state.user = user
         return request
+
+    def test_admin_teacher_metrics_and_removal_preserve_records(self):
+        teacher = create_teacher(AccountCreate(name="Teacher",email="teacher@example.com",access_code="22222"),self.request(self.admin))
+        teacher_request = self.request(teacher)
+        classroom = create_class(ClassroomCreate(name="Physics"),teacher_request)
+        add_student(classroom["id"],AccountCreate(name="Student",email="student@example.com",access_code="33333"),teacher_request)
+        now = datetime.now(UTC).isoformat()
+        with get_connection() as connection:
+            connection.execute("INSERT INTO papers(id,title,exam,subject,generation_config,branding_config,status,created_at,updated_at,owner_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                               (str(uuid.uuid4()),"Quiz","JEE","Physics",'{}','{}','generated',now,now,teacher["id"]))
+        item = teachers(self.request(self.admin))["items"][0]
+        self.assertEqual(item["metrics"]["papers_generated"],1)
+        self.assertEqual(item["metrics"]["classes_created"],1)
+        self.assertEqual(item["metrics"]["students_enrolled"],1)
+        self.assertEqual(delete_teacher(teacher["id"],self.request(self.admin)).status_code,204)
+        self.assertEqual(teachers(self.request(self.admin))["items"],[])
+        self.assertIsNone(authenticated_account(create_session(teacher["email"],get_auth_settings()),get_auth_settings()))
+        with get_connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM classrooms WHERE owner_id=?",(teacher["id"],)).fetchone()[0],1)
 
     def test_full_classroom_test_flow_and_immutable_republish(self):
         teacher = create_teacher(AccountCreate(name="Teacher",email="teacher@example.com",access_code="22222"),self.request(self.admin))
