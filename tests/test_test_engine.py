@@ -16,7 +16,7 @@ from app.core.auth import account_for_email, authenticated_account, create_sessi
 from app.db.database import SQLITE_SCHEMA, get_connection, initialize_database
 from app.api.auth import create_teacher, delete_teacher, teachers, login, update_teacher, AccountCreate, AccountUpdate
 from app.schemas.auth import LoginRequest
-from app.api.assessments import create_class, add_student, create_standalone_student, publish_paper, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
+from app.api.assessments import create_class, add_student, create_standalone_student, publish_paper, update_accommodation, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, AccommodationUpdate, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
 from app.services.assessment import score_item, snapshot_item
 from app.api.banks import publish_bank, list_banks, BankPublish
 from app.api.questions import (
@@ -127,6 +127,12 @@ class TestEngineTests(unittest.TestCase):
             current_user_context.reset(token)
         update_assignments(test["id"],AssignmentUpdate(student_ids=[student["id"]]),teacher_request)
         self.assertEqual(len(student_tests(self.request(student))["items"]),1)
+        accommodation = update_accommodation(test["id"], student["id"], AccommodationUpdate(extra_minutes=15), teacher_request)
+        self.assertEqual(accommodation["extra_seconds"], 900)
+        unassigned = create_standalone_student(AccountCreate(name="Other",email="other@example.com",access_code="44444"),teacher_request)
+        with self.assertRaises(HTTPException) as denied:
+            update_accommodation(test["id"], unassigned["id"], AccommodationUpdate(extra_minutes=15), teacher_request)
+        self.assertEqual(denied.exception.status_code, 404)
 
     def test_active_attempt_survives_republish_and_unassignment(self):
         teacher = create_teacher(AccountCreate(name="Teacher",email="teacher@example.com",access_code="22222"),self.request(self.admin))

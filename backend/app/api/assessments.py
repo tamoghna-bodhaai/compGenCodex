@@ -371,8 +371,25 @@ def update_accommodation(test_id: str, student_id: str, payload: AccommodationUp
     user = actor(request, "admin", "teacher")
     with get_connection() as connection:
         owned_test(connection, test_id, user)
-        if not connection.execute("SELECT 1 FROM class_memberships m JOIN classrooms c ON c.id=m.class_id WHERE m.student_id=? AND c.owner_id=?", (student_id, user["id"])).fetchone():
-            raise HTTPException(404, "Student not found in your classes")
+        assigned = connection.execute(
+            """
+            SELECT 1
+            FROM users u
+            WHERE u.id=? AND u.role='student' AND u.status='active'
+              AND (?='admin' OR u.owner_id=?)
+              AND EXISTS (
+                SELECT 1 FROM test_assignments a
+                WHERE a.test_id=? AND (
+                  a.student_id=u.id OR a.class_id IN (
+                    SELECT m.class_id FROM class_memberships m WHERE m.student_id=u.id
+                  )
+                )
+              )
+            """,
+            (student_id, user["role"], user["id"], test_id),
+        ).fetchone()
+        if not assigned:
+            raise HTTPException(404, "Student is not assigned to this test")
         connection.execute("INSERT INTO test_accommodations(test_id,student_id,extra_seconds) VALUES (?,?,?) ON CONFLICT(test_id,student_id) DO UPDATE SET extra_seconds=excluded.extra_seconds", (test_id, student_id, payload.extra_minutes * 60))
         audit(connection, user, "accommodation_updated", test_id, {"student_id":student_id, "extra_minutes":payload.extra_minutes})
     return {"student_id": student_id, "extra_seconds": payload.extra_minutes * 60}
