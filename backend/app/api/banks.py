@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -23,6 +24,17 @@ class BankPublish(BaseModel):
 def admin(request: Request) -> None:
     if request.state.user["role"] != "admin":
         raise HTTPException(403, "Only the super admin can publish question banks")
+
+
+def has_answer(answer_json: str | None) -> bool:
+    try:
+        value = json.loads(answer_json) if answer_json else None
+    except (TypeError, ValueError):
+        return False
+    answer = value.get("correct_answer") if isinstance(value, dict) else None
+    if isinstance(answer, str):
+        return bool(answer.strip())
+    return answer is not None and answer != [] and answer != {}
 
 
 @router.get("")
@@ -56,12 +68,16 @@ def publish_bank(bank_id: str, payload: BankPublish, request: Request) -> dict:
             ids += [row["id"] for row in connection.execute("SELECT id FROM questions WHERE source_job_id=?", (payload.source_job_id,)) if row["id"] not in ids]
         if not ids:
             raise HTTPException(422, "Select questions or an ingestion source to publish")
-        rows = connection.execute(f"SELECT id, answer_json FROM questions WHERE id IN ({','.join('?' for _ in ids)})", ids).fetchall()
+        rows = connection.execute(f"SELECT id, answer_json, source_question_number FROM questions WHERE id IN ({','.join('?' for _ in ids)})", ids).fetchall()
         if len(rows) != len(ids):
             raise HTTPException(422, "Some questions no longer exist")
-        missing = [row["id"] for row in rows if not row["answer_json"]]
+        missing = [row for row in rows if not has_answer(row["answer_json"])]
         if missing:
-            raise HTTPException(422, {"message": "Questions need reviewed answers", "question_ids": missing})
+            labels = [f"Q{row['source_question_number']}" if row["source_question_number"] is not None else row["id"] for row in missing]
+            shown = ", ".join(labels[:20])
+            if len(labels) > 20:
+                shown += f" and {len(labels) - 20} more"
+            raise HTTPException(422, {"message": f"Missing recorded answers for {shown}. Add or map answers in Ingestion before publishing.", "question_ids": [row["id"] for row in missing]})
         connection.executemany("UPDATE questions SET bank_id=?, published=1, verification_status='approved' WHERE id=?", [(bank_id, identifier) for identifier in ids])
         connection.execute("UPDATE question_banks SET status='published' WHERE id=?", (bank_id,))
     return {"id": bank_id, "published_count": len(ids)}

@@ -235,6 +235,36 @@ class TestEngineTests(unittest.TestCase):
             self.assertEqual(version["questions"][0]["answer"],["A"])
             self.assertEqual(version["questions"][1]["stem"],"Generated variation")
 
+    def test_source_publication_uses_recorded_answers_not_review_status(self):
+        source = Path(__file__).resolve().parents[1] / "sample_data" / "jee_definite_integrals_questions.json"
+        upsert_seed_questions(source)
+        with get_connection() as connection:
+            connection.execute("INSERT INTO ingestion_jobs(id,source_name,state,phase,created_at,updated_at) VALUES ('source','source.pdf','succeeded','complete','2020','2020')")
+            ids = [row["id"] for row in connection.execute("SELECT id FROM questions LIMIT 2")]
+            connection.execute("UPDATE questions SET source_job_id=?, source_question_number=1, verification_status='pending_review', answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": "A"}), ids[0]))
+            connection.execute("UPDATE questions SET source_job_id=?, source_question_number=2, verification_status='pending_review', answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": "0"}), ids[1]))
+
+        result = publish_bank("legacy", BankPublish(source_job_id="source"), self.request(self.admin))
+        self.assertEqual(result["published_count"], 2)
+        with get_connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM questions WHERE source_job_id='source' AND published=1").fetchone()[0], 2)
+
+    def test_source_publication_identifies_questions_with_missing_answers(self):
+        source = Path(__file__).resolve().parents[1] / "sample_data" / "jee_definite_integrals_questions.json"
+        upsert_seed_questions(source)
+        with get_connection() as connection:
+            connection.execute("INSERT INTO ingestion_jobs(id,source_name,state,phase,created_at,updated_at) VALUES ('source','source.pdf','succeeded','complete','2020','2020')")
+            ids = [row["id"] for row in connection.execute("SELECT id FROM questions LIMIT 2")]
+            connection.execute("UPDATE questions SET source_job_id=?, source_question_number=1, answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": "A"}), ids[0]))
+            connection.execute("UPDATE questions SET source_job_id=?, source_question_number=2, answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": None}), ids[1]))
+
+        with self.assertRaises(HTTPException) as raised:
+            publish_bank("legacy", BankPublish(source_job_id="source"), self.request(self.admin))
+        self.assertIn("Q2", raised.exception.detail["message"])
+        self.assertEqual(raised.exception.detail["question_ids"], [ids[1]])
+        with get_connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM questions WHERE source_job_id='source' AND published=1").fetchone()[0], 0)
+
     def test_populated_legacy_database_gains_owner_without_losing_rows(self):
         path = Path(self.temp.name) / "legacy.db"
         with sqlite3.connect(path) as connection:

@@ -9,6 +9,13 @@ import { MathContent } from "@/components/math-content";
 import { Button, EmptyState, Field, PageHeader, Textarea } from "@/components/ui";
 import s from "@/styles/ui.module.css";
 
+function hasAnswer(answer: unknown): boolean {
+  if (typeof answer === "string") return !!answer.trim();
+  if (Array.isArray(answer)) return answer.length > 0;
+  if (answer && typeof answer === "object") return Object.keys(answer).length > 0;
+  return answer != null;
+}
+
 function Question({ item, generation, remove }: { item: SeedQuestion; generation?: BankSolutionJob["items"][number]; remove: () => void }) {
   const solutionStatus = generation?.state === "failed" ? "Generation failed" : generation?.state === "running" ? "Generating…" : generation?.state === "queued" ? "Waiting in queue…" : "Not available";
   return <article className={s.sourceReviewQuestion}>
@@ -22,7 +29,7 @@ function Question({ item, generation, remove }: { item: SeedQuestion; generation
         <div className={s.chipRow}><span className={s.chip}>Format: {item.response_spec?.mode || item.question_type}</span><span className={s.chip}>Review: {item.verification_status.replaceAll("_", " ")}</span></div>
       </div>
       <section className={s.sourceReviewSolution} aria-label={`Solution for question ${item.source_question_number ?? "unknown"}`}>
-        {item.answer_json?.correct_answer != null && <p><strong>Answer: </strong><MathContent value={String(item.answer_json.correct_answer)} /></p>}
+        {hasAnswer(item.answer_json?.correct_answer) ? <p><strong>Answer: </strong><MathContent value={typeof item.answer_json?.correct_answer === "object" ? JSON.stringify(item.answer_json.correct_answer) : String(item.answer_json?.correct_answer)} /></p> : <p><strong>Answer: </strong>Not recorded</p>}
         <details className={s.sourceReviewSolutionDetails}>
           <summary><span>Solution</span>{!item.solution && <small>{solutionStatus}</small>}</summary>
           {item.solution ? <MathContent as="div" value={item.solution} /> : generation?.state === "failed" ? <p className={s.sourceReviewFailure}>{generation.error_message || "Generation failed for this question."}</p> : <p className={s.muted}>No solution yet.</p>}
@@ -72,6 +79,7 @@ export function SourceReviewScreen({ jobId }: { jobId: string }) {
   }, [activeJobId, activeJobState, jobId, toast]);
   const questions = useMemo(() => report?.questions.filter((q) => (!filter.chapter || q.chapter === filter.chapter) && (!filter.topic || q.topic === filter.topic) && (!filter.subtopic || q.subtopic === filter.subtopic)) || [], [report, filter]);
   const missingSolutions = questions.filter((question) => !question.solution).length;
+  const missingAnswers = report?.questions.filter((question) => !hasAnswer(question.answer_json?.correct_answer)) || [];
   const eligibleMissingSolutions = questions.filter((question) => !question.solution && question.response_spec?.supported_for_generation !== false).length;
   const generationByQuestion = useMemo(() => new Map(solutionJob?.items.map((item) => [item.question_id, item]) || []), [solutionJob]);
   const jobActive = solutionJob?.state === "queued" || solutionJob?.state === "running";
@@ -91,6 +99,7 @@ export function SourceReviewScreen({ jobId }: { jobId: string }) {
     {error ? <EmptyState title="Couldn’t load source review" description={error} action={<Button onClick={() => void load()}>Retry</Button>} /> : !report ? <EmptyState title="Loading source review" description="Reading source questions…" /> : <div className={s.sourceReviewLayout}>
       <section className={s.sourceReviewTools}>
         <p>{report.summary.accepted} accepted · {report.summary.review_needed} review needed · {report.summary.diagrams} diagrams · {report.chunks.length} extraction chunks</p>
+        <p aria-live="polite">{missingAnswers.length === 0 ? `All ${report.questions.length} questions have recorded answers.` : `${missingAnswers.length} of ${report.questions.length} questions missing recorded answers: ${missingAnswers.map((question) => question.source_question_number != null ? `Q${question.source_question_number}` : question.id).join(", ")}. Map answers below before publishing.`}</p>
         <div className={s.chipRow}>{Object.entries(report.formats).map(([key, count]) => <span className={s.chip} key={key}>{key}: {count}</span>)}</div>
         <details><summary>Taxonomy and groups</summary>{Object.entries(report.taxonomy).map(([key, count]) => <p key={key}>{key}: {count}</p>)}{Object.entries(report.groups).map(([key, count]) => <p key={key}>Group {key}: {count}</p>)}</details>
         <div className={s.sourceReviewFilters}>{(["chapter", "topic", "subtopic"] as const).map((key) => <label key={key}>{key[0].toUpperCase() + key.slice(1)}<select className={s.input} value={filter[key]} onChange={(event) => setFilter((current) => ({ ...current, [key]: event.target.value, ...(key === "chapter" ? { topic: "", subtopic: "" } : key === "topic" ? { subtopic: "" } : {}) }))}><option value="">All</option>{[...new Set(report.questions.filter((q) => (key === "chapter" || !filter.chapter || q.chapter === filter.chapter) && (key !== "subtopic" || !filter.topic || q.topic === filter.topic)).map((q) => q[key]).filter(Boolean))].map((value) => <option key={value} value={value!}>{value}</option>)}</select></label>)}</div>
