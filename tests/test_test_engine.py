@@ -9,6 +9,7 @@ import uuid
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import Request, Response, HTTPException
 
@@ -28,7 +29,7 @@ from app.api.questions import (
 )
 from app.services.seed_import import upsert_seed_questions
 from app.services.papers import PaperService
-from app.main import require_authenticated_api_session
+from app.main import health, readiness, require_authenticated_api_session
 
 
 class TestEngineTests(unittest.TestCase):
@@ -50,6 +51,14 @@ class TestEngineTests(unittest.TestCase):
         request = Request({"type":"http","method":"GET","path":"/","headers":[]})
         request.state.user = user
         return request
+
+    def test_liveness_and_readiness_have_distinct_failure_semantics(self):
+        self.assertEqual(health(), {"status": "ok"})
+        self.assertEqual(readiness(), {"status": "ready"})
+        with patch("app.main.get_connection", side_effect=sqlite3.OperationalError("database offline")):
+            response = readiness()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(json.loads(response.body), {"status": "not_ready"})
 
     def test_admin_teacher_metrics_and_removal_preserve_records(self):
         teacher = create_teacher(AccountCreate(name="Teacher",email="teacher@example.com",access_code="22222"),self.request(self.admin))

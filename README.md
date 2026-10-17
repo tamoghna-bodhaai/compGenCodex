@@ -34,7 +34,7 @@ Start FastAPI on port 8000:
 cd backend
 uv sync
 uv run python ../scripts/seed_database.py
-uv run fastapi dev app/main.py
+uv run uvicorn app.main:app --reload
 ```
 
 In a second terminal, start the Next.js workspace on port 3000:
@@ -96,7 +96,8 @@ Directory so it discovers the matching `railway.toml`:
    service is named `api`, set `BACKEND_URL` to
    `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:${{api.PORT}}`. Generate a public
    domain only for this frontend service; do not generate one for the API.
-3. Confirm the API health check at `/api/health`, then open the frontend public
+3. Confirm API liveness at `/api/health` and database/storage readiness at
+   `/api/ready`, then open the frontend public
    URL. A backend restart must retain the database and `/data/exports` archive.
 
 ### Migrating existing data

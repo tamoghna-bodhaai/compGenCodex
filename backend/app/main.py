@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 import asyncio
 import logging
+import uuid
 from datetime import UTC, datetime
 from fastapi.responses import JSONResponse
 
@@ -13,7 +14,7 @@ from app.core.auth import (
     get_auth_settings,
     bootstrap_admin, current_user_context, authenticated_account,
 )
-from app.db.database import get_connection
+from app.db.database import database_path, get_connection
 from app.api.generation import router as generation_router
 from app.api.papers import router as papers_router
 from app.api.questions import router as questions_router
@@ -46,7 +47,7 @@ app.include_router(banks_router)
 @app.middleware("http")
 async def require_authenticated_api_session(request: Request, call_next):
     """Keep every application API private while leaving login and health reachable."""
-    public_paths = {"/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/session"}
+    public_paths = {"/api/health", "/api/ready", "/api/auth/login", "/api/auth/logout", "/api/auth/session"}
     if not request.url.path.startswith("/api/") or request.url.path in public_paths:
         return await call_next(request)
     try:
@@ -123,3 +124,26 @@ async def shutdown() -> None:
 @app.get("/api/health", tags=["health"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/ready", tags=["health"])
+def readiness():
+    """Confirm the database and its persistent storage can serve traffic."""
+    probe = None
+    try:
+        with get_connection() as connection:
+            if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise RuntimeError("Database integrity check failed")
+        storage = database_path().resolve().parent
+        probe = storage / f".readiness-{uuid.uuid4().hex}"
+        probe.write_bytes(b"ready")
+        probe.unlink()
+        return {"status": "ready"}
+    except Exception:
+        logger.exception("Readiness check failed")
+        if probe is not None:
+            try:
+                probe.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
