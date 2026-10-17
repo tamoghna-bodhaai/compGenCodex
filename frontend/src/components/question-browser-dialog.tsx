@@ -20,6 +20,10 @@ function hasRecordedAnswer(question: SeedQuestion) {
   return answer !== null && answer !== undefined && answer !== "" && (!Array.isArray(answer) || answer.length > 0);
 }
 
+function isReadyForSelection(question: SeedQuestion, mode: "source" | "exact") {
+  return question.verification_status === "approved" && hasRecordedAnswer(question) && (mode === "exact" || question.response_spec?.supported_for_generation !== false);
+}
+
 function QuestionDetail({ question, onClose, onChange }: { question: SeedQuestion | null; onClose: () => void; onChange: (question: SeedQuestion) => void }) {
   const { toast, role } = useWorkspace();
   const [solving, setSolving] = useState(false);
@@ -75,13 +79,13 @@ export function QuestionBrowserDialog({ open, selection, chapters, title = "Ques
     return () => controller.abort();
   }, [open, selection, chapters, offset]);
 
-  function toggle(id: string) { if (unavailableIds.includes(id)) return; setChosen((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
+  function toggle(question: SeedQuestion) { if (unavailableIds.includes(question.id) || !isReadyForSelection(question, selectionMode)) return; setChosen((current) => current.includes(question.id) ? current.filter((item) => item !== question.id) : [...current, question.id]); }
   const page = Math.floor(offset / 20) + 1;
   return <>
     <Dialog open={open} wide title={title} subtitle={breadcrumb(selection)} onClose={onClose} footer={selectable ? <div className={s.modalActions}><span className={s.muted}>{chosen.length} question{chosen.length === 1 ? "" : "s"} selected</span><Button tone="primary" onClick={() => onConfirm?.(chosen, chosen.flatMap((id) => knownQuestions[id] ? [knownQuestions[id]] : []))}>Use selected questions</Button></div> : undefined}>
       <div className={s.modalBody}><div className={s.questionBrowserHead}><p>{total} classified question{total === 1 ? "" : "s"}</p>{selectable && <p>{selectionMode === "exact" ? "Selected questions are copied into the paper." : "Selected questions are reusable sources for generated variations."}</p>}</div>
         {error ? <EmptyState title="Couldn’t load questions" description={error} /> : questions.length ? <div className={s.bankQuestionGrid}>{questions.map((question) => <article className={s.bankQuestionCard} key={question.id}>
-          <div className={s.questionBrowserCardHead}><span className={s.eyebrow}>Question {question.source_reference?.match(/question (\d+)/i)?.[1] || ""}</span>{selectable && <label className={s.seedToggle}><input type="checkbox" checked={chosen.includes(question.id)} disabled={unavailableIds.includes(question.id) || (selectionMode === "source" && (!hasRecordedAnswer(question) || !question.response_spec?.supported_for_generation))} onChange={() => toggle(question.id)} /> {unavailableIds.includes(question.id) ? "Already selected in another section" : selectionMode === "exact" ? hasRecordedAnswer(question) ? "Select question" : "Select question · answer missing" : !hasRecordedAnswer(question) ? "Missing recorded answer" : question.response_spec?.supported_for_generation ? "Select source" : "Review only"}</label>}</div>
+          <div className={s.questionBrowserCardHead}><span className={s.eyebrow}>Question {question.source_reference?.match(/question (\d+)/i)?.[1] || ""}</span>{selectable && <label className={s.seedToggle}><input type="checkbox" checked={chosen.includes(question.id)} disabled={unavailableIds.includes(question.id) || !isReadyForSelection(question, selectionMode)} onChange={() => toggle(question)} /> {unavailableIds.includes(question.id) ? "Already selected in another section" : question.verification_status !== "approved" ? "Complete source review first" : !hasRecordedAnswer(question) ? "Missing recorded answer" : selectionMode === "exact" ? "Select question" : question.response_spec?.supported_for_generation === false ? "Review only" : "Select source"}</label>}</div>
           <MathContent as="p" value={question.question_json.stem} />{question.diagrams?.some((diagram) => diagram.url) && <span className={s.chip}>Diagram</span>}<small>{[question.question_type.replaceAll("_", " "), `Difficulty ${question.difficulty}/5`, question.verification_status.replaceAll("_", " ")].join(" · ")}</small>
           <Button size="small" onClick={() => setDetail(question)}>Read full question</Button>
         </article>)}</div> : <EmptyState title="No questions match this branch" description="Choose a different taxonomy branch." />}

@@ -29,7 +29,9 @@
 .topbarAction svg { width: 14px; }
 .signOut { border: 0; background: transparent; color: var(--muted); padding: 6px; font-size: 11px; font-weight: 650; cursor: pointer; }
 .signOut:hover { color: var(--ink); }
+.mobileMenuButton, .mobileNavBackdrop { display: none; }
 .mobileNav { display: none; }
+.visuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 .content { width: 100%; max-width: 1420px; margin: 0 auto; padding: 30px 32px 52px; }
 .narrowContent { max-width: 1040px; }
 .bankContent { max-width: 1160px; }
@@ -318,6 +320,7 @@
 .editorTabs { display: flex; gap: 4px; margin: -8px 0 14px; border-bottom: 1px solid var(--line); }
 .editorTabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 9px 10px; font-size: 11px; font-weight: 650; cursor: pointer; }
 .editorTabs .editorTabActive { border-bottom-color: var(--accent); color: var(--ink); }
+.mobileEditorTabs { display: none; }
 .editorCommandBar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: -9px 0 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); padding: 9px 10px; }
 .editorCommandBar > strong { margin-right: auto; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
 .editorContent > .jobProgress { margin-bottom: 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--surface-subtle); padding: 12px 14px; }
@@ -359,15 +362,18 @@
   .pageHeader { align-items: flex-start; }
   .pageActions { max-width: 560px; justify-content: flex-end; }
   .editorContent .pageHeader { flex-direction: column; }
-  .editorContent .pageActions { width: 100%; max-width: none; justify-content: flex-start; }
+  .editorContent .pageActions { width: 100%; max-width: none; flex-basis: auto; justify-content: flex-start; }
 }
 @media (max-width: 950px) {
   .shell { display: block; padding: 0; }
   .sidebar { display: none; }
   .workspace { min-height: 100vh; border: 0; border-radius: 0; }
   .topbar { padding: 0 20px; }
-  .mobileNav { display: flex; gap: 3px; overflow-x: auto; border-bottom: 1px solid var(--line); background: #fff; padding: 7px 20px; }
-  .mobileNav a { display: inline-flex; min-height: 34px; flex: 0 0 auto; align-items: center; gap: 6px; border-radius: 8px; color: var(--muted); padding: 7px 9px; font-size: 11px; font-weight: 650; }
+  .mobileMenuButton { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--ink); }
+  .mobileMenuButton svg { width: 20px; }
+  .mobileNavBackdrop { position: fixed; inset: 58px 0 0; z-index: 28; display: block; width: 100%; border: 0; background: rgba(20,20,22,.42); }
+  .mobileNav { position: fixed; top: 58px; left: 0; z-index: 30; display: grid; width: min(320px, calc(100vw - 44px)); max-height: calc(100vh - 58px); gap: 4px; overflow-y: auto; border-right: 1px solid var(--line); background: #fff; padding: 12px; box-shadow: 16px 0 36px rgba(0,0,0,.16); }
+  .mobileNav a { display: inline-flex; min-height: 44px; align-items: center; gap: 10px; border-radius: 9px; color: var(--muted); padding: 9px 11px; font-size: 13px; font-weight: 650; }
   .mobileNav svg { width: 14px; }
   .mobileNav .mobileActive { background: #efeff1; color: var(--ink); }
   .content { padding: 25px 20px 42px; }
@@ -380,6 +386,12 @@
   .paperRow .rowActions { margin-top: auto; justify-content: flex-start; }
   .editorQuestionsContent { height: auto; display: block; overflow: visible; }
   .editorGrid { grid-template-columns: 1fr; }
+  .mobileEditorTabs { display: flex; gap: 4px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); padding: 4px; }
+  .mobileEditorTabs button { min-height: 40px; flex: 1; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-weight: 650; }
+  .mobileEditorTabs button[aria-selected="true"] { background: #fff; color: var(--ink); box-shadow: var(--shadow-sm); }
+  .mobileEditorTabs button:disabled { opacity: .45; }
+  .editorGrid[data-mobile-pane="questions"] .mobileEditPane { display: none; }
+  .editorGrid[data-mobile-pane="edit"] .mobileListPane { display: none; }
   .questionPane { height: auto; overflow: hidden; }
   .inspector { position: static; }
   .editorQuestionsContent .inspector { height: auto; overflow: hidden; }
@@ -401,6 +413,7 @@
   .stickyFormActions > div:last-child { width: 100%; justify-content: flex-end; }
   .titleEdit { align-items: flex-start; flex-direction: column; }
   .titleEdit input { width: 100%; }
+  .buttonSmall, .signOut { min-height: 44px; }
 }
 @media (max-width: 560px) {
   .topbar { height: 54px; padding: 0 12px; }

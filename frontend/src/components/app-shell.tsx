@@ -21,8 +21,10 @@ const nav = [
 function Shell({ children, user }: { children: React.ReactNode; user: SessionAccount }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  useEffect(() => setMobileNavOpen(false), [pathname]);
   if (pathname === "/login") return <>{children}</>;
-  const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname.startsWith("/tests") ? "Tests" : pathname.startsWith("/student") ? "My tests" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/ingestion" ? "Ingestion" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
+  const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname.startsWith("/tests") ? "Tests" : pathname.startsWith("/student") ? "My tests" : pathname.startsWith("/admin") ? "Admin" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/ingestion" ? "Ingestion" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
   const navigation = user.role === "student" ? [{ href: "/student", label: "My tests", icon: "document" as const }] : [...nav.filter(item => user.role === "admin" || !["/ingestion", "/archive", "/branding"].includes(item.href)), { href: "/tests", label: "Tests & classes", icon: "document" as const }, ...(user.role === "admin" ? [{ href: "/admin", label: "Admin", icon: "library" as const }] : [])];
   const signOut = async () => {
     try {
@@ -43,8 +45,8 @@ function Shell({ children, user }: { children: React.ReactNode; user: SessionAcc
       <div className={s.sidebarFoot}><span>{user.name}</span><small>{user.role === "admin" ? "Super admin" : user.role === "teacher" ? "Teacher" : "Student"}</small></div>
     </aside>
     <main className={s.workspace}>
-      <header className={s.topbar}><div className={s.breadcrumb}><Icon name="document" /><span>Paper Studio</span><Icon name="chevron" /><strong>{routeName}</strong></div><div className={s.topbarActions}>{user.role !== "student" && <Link href="/new-paper" className={s.topbarAction}><Icon name="plus" />New paper</Link>}<button className={s.signOut} type="button" onClick={() => void signOut()}>Sign out</button></div></header>
-      <nav className={s.mobileNav} aria-label="Workspace navigation">{navigation.map((item) => <Link key={item.href} className={(item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ? s.mobileActive : ""} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>)}</nav>
+      <header className={s.topbar}><button className={s.mobileMenuButton} type="button" aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => setMobileNavOpen((open) => !open)}><Icon name={mobileNavOpen ? "close" : "questions"} /><span className={s.visuallyHidden}>{mobileNavOpen ? "Close navigation" : "Open navigation"}</span></button><div className={s.breadcrumb}><Icon name="document" /><span>Paper Studio</span><Icon name="chevron" /><strong>{routeName}</strong></div><div className={s.topbarActions}>{user.role !== "student" && <Link href="/new-paper" className={s.topbarAction}><Icon name="plus" />New paper</Link>}<button className={s.signOut} type="button" onClick={() => void signOut()}>Sign out</button></div></header>
+      {mobileNavOpen && <><button className={s.mobileNavBackdrop} type="button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} /><nav id="mobile-workspace-navigation" className={s.mobileNav} aria-label="Workspace navigation">{navigation.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} aria-current={active ? "page" : undefined} className={active ? s.mobileActive : ""} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>; })}</nav></>}
       {children}
     </main>
     <LegacyHashRedirect />
