@@ -68,18 +68,28 @@ def login(payload: LoginRequest, response: Response) -> SessionResponse:
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response) -> Response:
+def logout() -> Response:
     settings = _settings_or_503()
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", httponly=True, secure=settings.cookie_secure, samesite="lax")
     return response
 
 
 @router.get("/session", response_model=SessionResponse)
-def session(request: Request) -> SessionResponse:
+def session(request: Request, response: Response) -> SessionResponse:
     settings = _settings_or_503()
     bootstrap_admin(settings)
-    user = authenticated_account(request.cookies.get(SESSION_COOKIE_NAME), settings)
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    user = authenticated_account(token, settings)
     if not user:
+        if token:
+            response.delete_cookie(
+                key=SESSION_COOKIE_NAME,
+                path="/",
+                httponly=True,
+                secure=settings.cookie_secure,
+                samesite="lax",
+            )
         return SessionResponse(authenticated=False)
     return SessionResponse(authenticated=True, user=SessionUser(**public_user(user)))
 

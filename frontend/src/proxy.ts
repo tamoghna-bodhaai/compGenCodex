@@ -4,7 +4,6 @@ const SESSION_COOKIE_NAME = "paper_studio_session";
 
 export function proxy(request: NextRequest) {
   if (request.nextUrl.pathname === "/login") {
-    if (request.cookies.has(SESSION_COOKIE_NAME)) return NextResponse.redirect(new URL("/", request.url));
     return NextResponse.next();
   }
   if (request.cookies.has(SESSION_COOKIE_NAME)) return NextResponse.next();

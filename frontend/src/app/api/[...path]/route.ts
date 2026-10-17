@@ -21,13 +21,21 @@ async function proxyToBackend(request: NextRequest) {
     }
   }
 
-  const backendResponse = await fetch(targetUrl, {
-    method: request.method,
-    headers,
-    body,
-    // @ts-expect-error duplex required for Node fetch
-    duplex: "half",
-  });
+  let backendResponse: Response;
+  try {
+    backendResponse = await fetch(targetUrl, {
+      method: request.method,
+      headers,
+      body,
+      // @ts-expect-error duplex required for Node fetch
+      duplex: "half",
+    });
+  } catch {
+    return NextResponse.json(
+      { detail: "The application service is temporarily unavailable. Please try again." },
+      { status: 502 },
+    );
+  }
 
   const responseHeaders = new Headers(backendResponse.headers);
   responseHeaders.delete("content-encoding");

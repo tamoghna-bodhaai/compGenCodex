@@ -56,8 +56,19 @@ class AuthenticationTests(unittest.TestCase):
         result = login(LoginRequest(email="utils@bodhaai.tech", access_code="12345"), response)
         self.assertTrue(result.authenticated)
         cookie = next(value.decode() for key, value in response.raw_headers if key == b"set-cookie").split(";", 1)[0]
-        session_result = session(request_with_cookie(cookie))
+        session_result = session(request_with_cookie(cookie), Response())
         self.assertTrue(session_result.authenticated)
+
+    def test_invalid_session_cookie_is_expired(self) -> None:
+        response = Response()
+        result = session(
+            request_with_cookie("paper_studio_session=invalid"),
+            response,
+        )
+
+        self.assertFalse(result.authenticated)
+        cookie = next(value.decode() for key, value in response.raw_headers if key == b"set-cookie")
+        self.assertIn("paper_studio_session=\"\"", cookie)
 
     def test_login_rejects_invalid_credentials(self) -> None:
         with self.assertRaises(HTTPException) as raised:
@@ -80,7 +91,7 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(outcomes.count(429), 5)
 
     def test_logout_clears_the_cookie(self) -> None:
-        response = Response()
-        logout(response)
+        response = logout()
+        self.assertEqual(response.status_code, 204)
         cookie = next(value.decode() for key, value in response.raw_headers if key == b"set-cookie")
         self.assertIn("paper_studio_session=\"\"", cookie)

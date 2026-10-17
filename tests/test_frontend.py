@@ -37,7 +37,8 @@ class FrontendContractTests(unittest.TestCase):
         login = (FRONTEND / "src/components/login-screen.tsx").read_text()
         proxy = (FRONTEND / "src/proxy.ts").read_text()
         api = (FRONTEND / "src/lib/api.ts").read_text()
-        self.assertIn("utils@bodhaai.tech", login)
+        self.assertIn("account email", login)
+        self.assertNotIn("utils@bodhaai.tech", login)
         self.assertIn("/auth/login", api)
         self.assertIn("paper_studio_session", proxy)
 
