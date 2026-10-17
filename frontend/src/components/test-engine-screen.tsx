@@ -179,6 +179,7 @@ export function AttemptScreen({ id }: { id: string }) {
   const [clockOffset, setClockOffset] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const currentId = attempt?.questions[index]?.id;
   const attemptExists = Boolean(attempt);
   const attemptSubmitted = Boolean(attempt?.submitted_at);
@@ -241,8 +242,9 @@ export function AttemptScreen({ id }: { id: string }) {
   async function go(next: number) { if (!attempt || busy || next === index) return; if (dirty && !await save()) return; setIndex(next); }
   async function submit() {
     if (!attempt || busy) return;
-    const answered = Object.values(attempt.responses).filter(row => row.answer !== null && row.answer !== "" && !(Array.isArray(row.answer) && !row.answer.length)).length;
-    if (!window.confirm(`Submit this test? ${answered} of ${attempt.questions.length} questions have saved answers.`)) return;
+    const prospectiveResponses = currentId ? { ...attempt.responses, [currentId]: { answer, marked_for_review: marked } } : attempt.responses;
+    const answered = Object.values(prospectiveResponses).filter(row => row.answer !== null && row.answer !== "" && !(Array.isArray(row.answer) && !row.answer.length)).length;
+    if (!window.confirm(`Submit this test? ${answered} of ${attempt.questions.length} questions have answers.`)) return;
     if (dirty && !await save()) return;
     setBusy(true); try { await api.submitAttempt(attempt.id); router.push(`/student/results/${attempt.id}`); } catch (e) { setError(message(e)); setBusy(false); }
   }
@@ -250,23 +252,25 @@ export function AttemptScreen({ id }: { id: string }) {
   if (attempt.submitted_at || remaining === 0) return <section className={s.page}><PageHeader title="Test ended" description={attempt.submitted_at ? "Your saved answers have been submitted." : "Checking submission with the server…"} />{error && <p className={s.error} role="alert">{error}</p>}{!attempt.submitted_at && error && <Button onClick={() => void confirmTimeout()}>Check submission</Button>}<Link href={`/student/results/${id}`}>View result when released</Link>{dirty && <p className={s.error}>Your last unsaved answer could not be submitted before the deadline.</p>}</section>;
   const question = attempt.questions[index];
   const sections = [...new Set(attempt.questions.map(item => item.section || "General"))];
-  return <section className={s.page}>
-    <PageHeader eyebrow={`Question ${index + 1} of ${attempt.questions.length}`} title="Assessment" description={remaining === null ? "Synchronizing clock…" : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")} remaining`} />
+  return <section className={`${s.page} ${s.attemptPage}`}>
+    <header className={s.examHeader}><div><span>Question {index + 1} of {attempt.questions.length}</span><h1>Assessment</h1></div><div className={s.examStatus}><small>{dirty ? "Unsaved changes" : busy ? "Saving…" : "Saved"}</small><strong aria-label="Time remaining">{remaining === null ? "Synchronizing…" : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`}</strong><button className={s.paletteToggle} type="button" aria-expanded={paletteOpen} aria-controls="question-palette" onClick={() => setPaletteOpen(true)}>Questions</button></div></header>
     {error && <p className={s.error} role="alert">{error}</p>}
     <nav className={s.actions} aria-label="Test sections">{sections.map(section => <Button key={section} size="small" disabled={busy} onClick={() => void go(attempt.questions.findIndex(item => (item.section || "General") === section))}>{section}</Button>)}</nav>
-    <div className={s.card}><p className={s.muted}>{question.section || "General"} · {question.scoring.full} marks · {dirty ? "Unsaved changes" : busy ? "Saving…" : "Saved"}</p>
-      {question.response_spec.instructions && <p>{question.response_spec.instructions}</p>}
-      <MathContent as="div" value={question.stem} />{question.diagrams.filter(diagram => diagram.option_index == null).map(diagram => <img className={s.diagram} key={diagram.id} src={diagram.url} alt={diagram.description} />)}
-      <fieldset disabled={busy} style={{ border: 0, padding: 0 }}><ResponseEditor question={question} value={answer} onChange={value => change(value)} /></fieldset>
-      <div className={s.actions}><Button disabled={busy} onClick={() => void save()}>Save answer</Button><Button disabled={busy} onClick={() => change(null)}>Clear response</Button><Button disabled={busy} onClick={() => change(answer, !marked)}>{marked ? "Remove review mark" : "Mark for review"}</Button><Button disabled={index === 0 || busy} onClick={() => void go(index - 1)}>Previous</Button><Button disabled={index === attempt.questions.length - 1 || busy} onClick={() => void go(index + 1)}>Next</Button><Button tone="primary" disabled={busy} onClick={() => void submit()}>Submit test</Button></div>
+    <div className={s.attemptGrid}>
+      <main className={`${s.card} ${s.questionCard}`}><p className={s.muted}>{question.section || "General"} · {question.scoring.full} marks</p>
+        {question.response_spec.instructions && <p>{question.response_spec.instructions}</p>}
+        <MathContent as="div" value={question.stem} />{question.diagrams.filter(diagram => diagram.option_index == null).map(diagram => <img className={s.diagram} key={diagram.id} src={diagram.url} alt={diagram.description} />)}
+        <fieldset disabled={busy} style={{ border: 0, padding: 0 }}><ResponseEditor question={question} value={answer} onChange={value => change(value)} /></fieldset>
+        <div className={`${s.actions} ${s.attemptActions}`}><Button disabled={busy} onClick={() => void save()}>Save answer</Button><Button disabled={busy} onClick={() => change(null)}>Clear response</Button><Button disabled={busy} onClick={() => change(answer, !marked)}>{marked ? "Remove review mark" : "Mark for review"}</Button><Button disabled={index === 0 || busy} onClick={() => void go(index - 1)}>Previous</Button><Button disabled={index === attempt.questions.length - 1 || busy} onClick={() => void go(index + 1)}>Next</Button><Button tone="primary" disabled={busy} onClick={() => void submit()}>Submit test</Button></div>
+      </main>
+      {paletteOpen && <button className={s.paletteBackdrop} type="button" aria-label="Close question palette" onClick={() => setPaletteOpen(false)} />}
+      <aside id="question-palette" className={`${s.palettePanel} ${paletteOpen ? s.palettePanelOpen : ""}`}><div className={s.paletteHeading}><div><strong>Questions</strong><small>{Object.keys(attempt.responses).length} saved responses</small></div><button type="button" onClick={() => setPaletteOpen(false)}>Close</button></div><p className={s.muted}>Not visited · unanswered · answered · marked for review</p><div className={s.numberGrid} aria-label="Question palette">{attempt.questions.map((item, number) => {
+        const response = number === index ? { answer, marked_for_review: marked } : attempt.responses[item.id];
+        const hasAnswer = response?.answer !== null && response?.answer !== undefined && response?.answer !== "" && !(Array.isArray(response.answer) && !response.answer.length);
+        const status = response?.marked_for_review ? hasAnswer ? "Answered and marked for review" : "Marked for review" : hasAnswer ? "Answered" : visited.includes(item.id) || response ? "Unanswered" : "Not visited";
+        return <button key={item.id} className={number === index ? s.activeNumber : ""} data-status={status} aria-label={`Question ${number + 1}: ${status}`} title={status} aria-current={number === index ? "true" : undefined} onClick={() => { setPaletteOpen(false); void go(number); }}>{number + 1}<span className={s.paletteStatus}>{status}</span></button>;
+      })}</div></aside>
     </div>
-    <p className={s.muted}>Question status: not visited · unanswered · answered · review · answered and review</p>
-    <div className={s.numberGrid} aria-label="Question palette">{attempt.questions.map((item, number) => {
-      const response = number === index ? { answer, marked_for_review: marked } : attempt.responses[item.id];
-      const hasAnswer = response?.answer !== null && response?.answer !== undefined && response?.answer !== "" && !(Array.isArray(response.answer) && !response.answer.length);
-      const status = response?.marked_for_review ? hasAnswer ? "Answered and marked for review" : "Marked for review" : hasAnswer ? "Answered" : visited.includes(item.id) || response ? "Unanswered" : "Not visited";
-      return <button key={item.id} className={number === index ? s.activeNumber : ""} data-status={status} aria-label={`Question ${number + 1}: ${status}`} title={status} aria-current={number === index ? "true" : undefined} onClick={() => void go(number)}>{number + 1}<span className={s.paletteStatus}>{status}</span></button>;
-    })}</div>
   </section>;
 }
 

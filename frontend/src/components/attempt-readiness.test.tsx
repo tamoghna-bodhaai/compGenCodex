@@ -28,4 +28,17 @@ describe("student attempt recovery", () => {
     expect(api.saveAttemptAnswer).toHaveBeenLastCalledWith("a1", "q1", { answer: "42", marked_for_review: false, revision: 0 });
     expect(sessionStorage.getItem("cbt-draft:a1:q1")).toBeNull();
   });
+
+  it("counts the visible unsaved answer in submit confirmation", async () => {
+    const now = Date.now();
+    vi.mocked(api.attempt).mockResolvedValue({ id: "a1", test_id: "t1", started_at: new Date(now).toISOString(), ends_at: new Date(now + 600_000).toISOString(), server_time: new Date(now).toISOString(), submitted_at: null, score: null, revision: 0, responses: {}, questions: [{ id: "q1", section: "Physics", kind: "numerical", stem: "Enter a value", options: [], diagrams: [], response_spec: { version: 1, mode: "numeric" }, scoring: { full: 4, negative: -1, zero: 0 } }] });
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<AttemptScreen id="a1" />);
+
+    await user.type(await screen.findByLabelText("Numeric answer"), "42");
+    await user.click(screen.getByRole("button", { name: "Submit test" }));
+
+    expect(confirmation).toHaveBeenCalledWith("Submit this test? 1 of 1 questions have answers.");
+  });
 });

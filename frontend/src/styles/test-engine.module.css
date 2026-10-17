@@ -43,7 +43,7 @@
 .diagram { max-width: min(100%,480px); max-height: 340px; object-fit: contain; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
 .numberGrid { display: flex; flex-wrap: wrap; gap: 7px; }
-.numberGrid button { width: 38px; height: 38px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.numberGrid button { width: 44px; height: 44px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); cursor: pointer; }
 .numberGrid .activeNumber { background: var(--accent); color: white; }
 .numberGrid .savedNumber { border-color: var(--success); color: var(--success); }
 .numberGrid button[data-status="Unanswered"] { background: #fee2e2; color: #991b1b; }
@@ -52,5 +52,41 @@
 .numberGrid button[data-status="Answered and marked for review"] { background: #5b21b6; color: white; }
 .numberGrid button.activeNumber { outline: 3px solid var(--accent); outline-offset: 2px; }
 .paletteStatus { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.attemptPage { max-width: 1500px; }
+.examHeader { position: sticky; top: 58px; z-index: 12; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: -28px -36px 0; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.96); padding: 14px 36px; backdrop-filter: blur(16px); }
+.examHeader span { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.examHeader h1 { margin: 3px 0 0; font-size: 24px; }
+.examStatus { display: flex; align-items: center; gap: 12px; }
+.examStatus small { color: var(--muted); }
+.examStatus strong { min-width: 84px; font-size: 21px; font-variant-numeric: tabular-nums; text-align: right; }
+.paletteToggle { display: none; min-height: 44px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; padding: 8px 12px; font-weight: 650; }
+.attemptGrid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+.questionCard { min-height: min(660px, calc(100vh - 210px)); }
+.attemptActions { position: sticky; bottom: 0; z-index: 5; margin: auto -24px -24px; border-top: 1px solid var(--line); background: rgba(255,255,255,.96); padding: 12px 24px; backdrop-filter: blur(14px); }
+.palettePanel { position: sticky; top: 150px; display: grid; gap: 12px; max-height: calc(100vh - 170px); overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 16px; box-shadow: var(--shadow-sm); }
+.paletteHeading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.paletteHeading > div { display: grid; gap: 3px; }
+.paletteHeading small { color: var(--muted); }
+.paletteHeading button { display: none; min-height: 44px; border: 0; background: transparent; color: var(--muted); }
+.paletteBackdrop { display: none; }
 .linkButton { background: var(--accent); color: white; padding: 10px 15px; border-radius: 8px; width: fit-content; }
-@media(max-width:700px) { .page { padding: 20px 16px 40px; } .grid { grid-template-columns: 1fr; } .row { flex-wrap: wrap; } }
+@media(max-width:900px) {
+  .attemptGrid { grid-template-columns: 1fr; }
+  .paletteToggle { display: inline-flex; align-items: center; }
+  .paletteBackdrop { position: fixed; inset: 0; z-index: 39; display: block; border: 0; background: rgba(20,20,22,.45); }
+  .palettePanel { position: fixed; top: 0; right: 0; z-index: 40; width: min(340px, calc(100vw - 36px)); height: 100vh; max-height: none; border-radius: 0; transform: translateX(105%); transition: transform .18s ease; }
+  .palettePanelOpen { transform: translateX(0); }
+  .paletteHeading button { display: block; }
+}
+@media(max-width:700px) {
+  .page { padding: 20px 16px 40px; }
+  .grid { grid-template-columns: 1fr; }
+  .row { flex-wrap: wrap; }
+  .examHeader { top: 54px; margin: -20px -16px 0; padding: 10px 16px; }
+  .examHeader h1 { font-size: 18px; }
+  .examStatus small { display: none; }
+  .examStatus strong { min-width: 72px; font-size: 18px; }
+  .questionCard { min-height: calc(100vh - 185px); padding: 18px 16px 96px; }
+  .attemptActions { position: fixed; right: 0; bottom: 0; left: 0; margin: 0; overflow-x: auto; flex-wrap: nowrap; padding: 10px 12px; box-shadow: 0 -8px 24px rgba(0,0,0,.1); }
+  .attemptActions > * { min-height: 44px; flex: 0 0 auto; }
+}
