@@ -19,7 +19,13 @@ from app.schemas.auth import LoginRequest
 from app.api.assessments import create_class, add_student, create_standalone_student, publish_paper, update_assignments, student_tests, start_attempt, save_response, submit_attempt, result, get_attempt, ClassroomCreate, PublishTest, AssignmentUpdate, ResponseIn
 from app.services.assessment import score_item, snapshot_item
 from app.api.banks import publish_bank, list_banks, BankPublish
-from app.api.questions import list_questions
+from app.api.questions import (
+    QuestionCorrection,
+    ReviewDecision,
+    approve_question,
+    correct_question,
+    list_questions,
+)
 from app.services.seed_import import upsert_seed_questions
 from app.services.papers import PaperService
 from app.main import require_authenticated_api_session
@@ -232,6 +238,7 @@ class TestEngineTests(unittest.TestCase):
             self.assertEqual(list_questions(limit=50,offset=0,chapter=[],topics=[],subtopic=[])["total"],0)
         finally:
             current_user_context.reset(token)
+        approve_question(question_id, ReviewDecision(note="Checked"), self.request(self.admin))
         publish_bank("legacy",BankPublish(question_ids=[question_id]),self.request(self.admin))
         token = current_user_context.set(teacher)
         try:
@@ -253,7 +260,7 @@ class TestEngineTests(unittest.TestCase):
             self.assertEqual(version["questions"][0]["answer"],["A"])
             self.assertEqual(version["questions"][1]["stem"],"Generated variation")
 
-    def test_source_publication_uses_recorded_answers_not_review_status(self):
+    def test_source_publication_requires_explicit_review_approval(self):
         source = Path(__file__).resolve().parents[1] / "sample_data" / "jee_definite_integrals_questions.json"
         upsert_seed_questions(source)
         with get_connection() as connection:
@@ -262,12 +269,31 @@ class TestEngineTests(unittest.TestCase):
             connection.execute("UPDATE questions SET source_job_id=?, source_question_number=1, verification_status='pending_review', answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": "A"}), ids[0]))
             connection.execute("UPDATE questions SET source_job_id=?, source_question_number=2, verification_status='pending_review', answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": "0"}), ids[1]))
 
+        with self.assertRaises(HTTPException) as raised:
+            publish_bank("legacy", BankPublish(source_job_id="source"), self.request(self.admin))
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(set(raised.exception.detail["question_ids"]), set(ids))
+
+        for identifier in ids:
+            approved = approve_question(identifier, ReviewDecision(note="Checked against source"), self.request(self.admin))
+            self.assertEqual(approved["verification_status"], "approved")
+
         result = publish_bank("legacy", BankPublish(source_job_id="source"), self.request(self.admin))
         self.assertEqual(result["published_count"], 2)
         with get_connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM questions WHERE source_job_id='source' AND published=1").fetchone()[0], 2)
 
-    def test_source_publication_identifies_questions_with_missing_answers(self):
+        corrected = correct_question(
+            ids[0],
+            QuestionCorrection(stem="Corrected stem", options=["A", "B", "C", "D"], correct_answer="B"),
+            self.request(self.admin),
+        )
+        self.assertEqual(corrected["verification_status"], "pending_review")
+        with get_connection() as connection:
+            row = connection.execute("SELECT published, reviewed_by, reviewed_at FROM questions WHERE id=?", (ids[0],)).fetchone()
+        self.assertEqual(tuple(row), (0, None, None))
+
+    def test_source_review_identifies_questions_with_missing_answers(self):
         source = Path(__file__).resolve().parents[1] / "sample_data" / "jee_definite_integrals_questions.json"
         upsert_seed_questions(source)
         with get_connection() as connection:
@@ -276,21 +302,17 @@ class TestEngineTests(unittest.TestCase):
             connection.execute("UPDATE questions SET source_job_id=?, source_question_number=1, answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": "A"}), ids[0]))
             connection.execute("UPDATE questions SET source_job_id=?, source_question_number=2, verification_status='pending_review', answer_json=? WHERE id=?", ("source", json.dumps({"correct_answer": None}), ids[1]))
 
+        approve_question(ids[0], ReviewDecision(note="Checked"), self.request(self.admin))
         with self.assertRaises(HTTPException) as raised:
-            publish_bank("legacy", BankPublish(source_job_id="source"), self.request(self.admin))
-        self.assertIn("Q2", raised.exception.detail["message"])
-        self.assertEqual(raised.exception.detail["question_ids"], [ids[1]])
+            approve_question(ids[1], ReviewDecision(note="Checked"), self.request(self.admin))
+        self.assertIn("valid answer", raised.exception.detail)
         with get_connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM questions WHERE source_job_id='source' AND published=1").fetchone()[0], 0)
 
-        result = publish_bank("legacy", BankPublish(source_job_id="source", allow_missing_answers=True), self.request(self.admin))
-        self.assertEqual(result["published_count"], 2)
-        self.assertEqual(result["missing_answer_count"], 1)
-        with get_connection() as connection:
-            rows = {row["id"]: dict(row) for row in connection.execute("SELECT id, published, verification_status, answer_json FROM questions WHERE source_job_id='source'")}
-        self.assertTrue(all(row["published"] for row in rows.values()))
-        self.assertEqual(rows[ids[1]]["verification_status"], "pending_review")
-        self.assertIsNone(json.loads(rows[ids[1]]["answer_json"])["correct_answer"])
+        with self.assertRaises(HTTPException) as publish_error:
+            publish_bank("legacy", BankPublish(source_job_id="source", allow_missing_answers=True), self.request(self.admin))
+        self.assertEqual(publish_error.exception.status_code, 409)
+        self.assertEqual(publish_error.exception.detail["question_ids"], [ids[1]])
 
         teacher = create_teacher(AccountCreate(name="Teacher", email="teacher@example.com", access_code="22222"), self.request(self.admin))
         with self.assertRaises(HTTPException) as forbidden:
@@ -308,7 +330,12 @@ class TestEngineTests(unittest.TestCase):
             connection.execute("UPDATE questions SET answer_json=NULL, solution=NULL WHERE id=?", (ids[1],))
             connection.execute("UPDATE questions SET source_job_id='source-b', answer_json=?, solution='Worked' WHERE id=?", (json.dumps({"correct_answer":"B"}), ids[3]))
             connection.execute("UPDATE questions SET source_job_id=NULL, source='Manual', answer_json=?, solution=NULL WHERE id=?", (json.dumps({"correct_answer":"C"}), ids[4]))
-        publish_bank("legacy", BankPublish(question_ids=[ids[0],ids[1],ids[3],ids[4]], allow_missing_answers=True), self.request(self.admin))
+            connection.execute("UPDATE questions SET answer_json=? WHERE id=?", (json.dumps({"correct_answer":"A"}), ids[1]))
+        for identifier in (ids[0], ids[1], ids[3], ids[4]):
+            approve_question(identifier, ReviewDecision(note="Checked"), self.request(self.admin))
+        publish_bank("legacy", BankPublish(question_ids=[ids[0],ids[1],ids[3],ids[4]]), self.request(self.admin))
+        with get_connection() as connection:
+            connection.execute("UPDATE questions SET answer_json=NULL, solution=NULL WHERE id=?", (ids[1],))
         bank = next(item for item in list_banks(self.request(self.admin))["items"] if item["id"] == "legacy")
         self.assertEqual((bank["question_count"],bank["missing_answer_count"],bank["missing_solution_count"]), (4,1,2))
         sources = {item["source_name"]: item for item in bank["sources"]}

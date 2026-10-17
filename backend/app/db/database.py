@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS questions (
     source TEXT,
     source_reference TEXT,
     verification_status TEXT NOT NULL,
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    review_note TEXT,
+    approval_provenance TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -439,6 +443,13 @@ def initialize_database(path: Path | None = None) -> Path:
             connection.execute("ALTER TABLE questions ADD COLUMN bank_id TEXT")
         if "published" not in question_columns:
             connection.execute("ALTER TABLE questions ADD COLUMN published INTEGER NOT NULL DEFAULT 0")
+        for column in ("reviewed_by", "reviewed_at", "review_note", "approval_provenance"):
+            if column not in question_columns:
+                connection.execute(f"ALTER TABLE questions ADD COLUMN {column} TEXT")
+        connection.execute(
+            "UPDATE questions SET approval_provenance='legacy_publication' "
+            "WHERE verification_status='approved' AND approval_provenance IS NULL"
+        )
         user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
         if "owner_id" not in user_columns:
             connection.execute("ALTER TABLE users ADD COLUMN owner_id TEXT")

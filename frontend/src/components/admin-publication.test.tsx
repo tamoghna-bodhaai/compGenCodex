@@ -17,23 +17,16 @@ vi.mock("@/lib/api", () => ({
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("bank publication", () => {
-  it("lets an admin choose to publish the whole source despite missing answers", async () => {
-    vi.mocked(api.publishBank)
-      .mockRejectedValueOnce(new Error("Missing recorded answers for Q10."))
-      .mockResolvedValueOnce({ published_count: 111, missing_answer_count: 1 });
+  it("keeps review failures visible and does not offer an answer bypass", async () => {
+    vi.mocked(api.publishBank).mockRejectedValueOnce(new Error("Every question must complete source review before publication."));
     const user = userEvent.setup();
     render(<AdminScreen />);
     await screen.findByText("Gravitation.pdf");
     await user.selectOptions(screen.getByRole("combobox"), "source");
     await user.click(screen.getByRole("button", { name: "Publish questions" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Missing recorded answers for Q10");
-    expect(api.publishBank).toHaveBeenNthCalledWith(1, "bank", { source_job_id: "source", question_ids: [], allow_missing_answers: false });
-
-    await user.click(screen.getByRole("checkbox", { name: "Publish even if answers are missing" }));
-    await user.click(screen.getByRole("button", { name: "Publish questions" }));
-    expect(api.publishBank).toHaveBeenNthCalledWith(2, "bank", { source_job_id: "source", question_ids: [], allow_missing_answers: true });
-    expect(await screen.findByRole("status")).toHaveTextContent("Published 111 questions. 1 without recorded answers.");
-    expect(screen.getByRole("checkbox", { name: "Publish even if answers are missing" })).not.toBeChecked();
+    expect(await screen.findByRole("alert")).toHaveTextContent("complete source review");
+    expect(api.publishBank).toHaveBeenCalledWith("bank", { source_job_id: "source", question_ids: [] });
+    expect(screen.queryByRole("checkbox", { name: "Publish even if answers are missing" })).not.toBeInTheDocument();
   });
 
   it("shows source-level publication tracking and refreshes current counts", async () => {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 
 from app.db.database import decode_question_row, get_connection
 from app.core.auth import current_user_context
@@ -10,9 +10,12 @@ from app.services.costs import cost_summary
 from app.services.diagrams import diagrams_for
 from app.services.source_material import add_attachment, attachment_text, delete_question as remove_bank_question, map_manually, promote_candidate
 from app.services.bank_solutions import queue_solution_job, get_solution_job, latest_source_solution_job, run_solution_job
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pathlib import Path
 import tempfile
+import json
+from datetime import UTC, datetime
+from typing import Any
 from app.services.document_renderer import PaperDocumentRenderer, DocumentRenderError
 from app.schemas.papers import ExportFormat, ExportVariant
 
@@ -35,6 +38,37 @@ class ManualMapping(BaseModel):
 
 class CandidateReview(BaseModel):
     changes: dict = Field(default_factory=dict)
+
+
+class QuestionCorrection(BaseModel):
+    stem: str = Field(min_length=1)
+    options: list[str] = Field(default_factory=list)
+    correct_answer: Any = None
+    solution: str | None = None
+
+    @model_validator(mode="after")
+    def validate_options(self) -> "QuestionCorrection":
+        self.stem = self.stem.strip()
+        if any(not option.strip() for option in self.options):
+            raise ValueError("options cannot contain empty values")
+        return self
+
+
+class ReviewDecision(BaseModel):
+    note: str | None = Field(default=None, max_length=1000)
+
+
+def _require_admin(request: Request) -> dict:
+    actor = getattr(request.state, "user", None)
+    if not actor or actor["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only the super admin can review the global question bank.")
+    return actor
+
+
+def _has_answer(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value is not None and value != [] and value != {}
 
 
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
@@ -282,7 +316,7 @@ def list_questions(
             parameters.append(value)
     actor = current_user_context.get()
     if actor and actor["role"] != "admin":
-        clauses.append("published = 1")
+        clauses.extend(("published = 1", "verification_status = 'approved'"))
     for path, value in (("paper", paper), ("section", section), ("mode", response_mode)):
         if value is not None:
             column = "exam_format_json" if path != "mode" else "response_spec_json"
@@ -318,7 +352,7 @@ def question_catalog(supported_only: bool = False) -> dict:
             SELECT exam, subject, chapter, topic, subtopic, question_type, difficulty, COUNT(*) AS count
             FROM questions
             WHERE (? = 0 OR response_spec_json IS NULL OR json_extract(response_spec_json, '$.supported_for_generation') = 1)
-              AND (? = 0 OR published = 1)
+              AND (? = 0 OR (published = 1 AND verification_status = 'approved'))
             GROUP BY exam, subject, chapter, topic, subtopic, question_type, difficulty
             ORDER BY exam, subject, chapter, topic, subtopic, question_type, difficulty
             """,
@@ -332,11 +366,82 @@ def get_question(question_id: str) -> dict:
     with get_connection() as connection:
         row = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
     actor = current_user_context.get()
-    if row is None or (actor and actor["role"] != "admin" and not row["published"]):
+    if row is None or (actor and actor["role"] != "admin" and (not row["published"] or row["verification_status"] != "approved")):
         raise HTTPException(status_code=404, detail="Question not found")
     item = decode_question_row(row)
     item["diagrams"] = diagrams_for(owner_column="seed_question_id", owner_id=item["id"])
     return item
+
+
+@router.put("/{question_id}")
+def correct_question(question_id: str, correction: QuestionCorrection, request: Request) -> dict:
+    _require_admin(request)
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        row = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Question not found")
+        question_json = json.loads(row["question_json"])
+        question_json["stem"] = correction.stem
+        question_json["options"] = correction.options
+        answer_json = json.loads(row["answer_json"]) if row["answer_json"] else {}
+        answer_json["correct_answer"] = correction.correct_answer
+        connection.execute(
+            """
+            UPDATE questions
+            SET question_json=?, answer_json=?, solution=?, verification_status='pending_review',
+                reviewed_by=NULL, reviewed_at=NULL, review_note=NULL,
+                approval_provenance=NULL, published=0, updated_at=?
+            WHERE id=?
+            """,
+            (json.dumps(question_json), json.dumps(answer_json), correction.solution, now, question_id),
+        )
+        updated = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
+    return decode_question_row(updated)
+
+
+@router.post("/{question_id}/approve")
+def approve_question(question_id: str, decision: ReviewDecision, request: Request) -> dict:
+    actor = _require_admin(request)
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        row = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Question not found")
+        answer_json = json.loads(row["answer_json"]) if row["answer_json"] else {}
+        if not _has_answer(answer_json.get("correct_answer")):
+            raise HTTPException(status_code=422, detail="Record a valid answer before approving this question.")
+        connection.execute(
+            """
+            UPDATE questions
+            SET verification_status='approved', reviewed_by=?, reviewed_at=?, review_note=?,
+                approval_provenance='human_review', updated_at=?
+            WHERE id=?
+            """,
+            (actor["id"], now, decision.note.strip() if decision.note else None, now, question_id),
+        )
+        updated = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
+    return decode_question_row(updated)
+
+
+@router.post("/{question_id}/reject")
+def reject_question(question_id: str, decision: ReviewDecision, request: Request) -> dict:
+    actor = _require_admin(request)
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        if not connection.execute("SELECT 1 FROM questions WHERE id = ?", (question_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Question not found")
+        connection.execute(
+            """
+            UPDATE questions
+            SET verification_status='rejected', reviewed_by=?, reviewed_at=?, review_note=?,
+                approval_provenance='human_review', published=0, updated_at=?
+            WHERE id=?
+            """,
+            (actor["id"], now, decision.note.strip() if decision.note else None, now, question_id),
+        )
+        updated = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
+    return decode_question_row(updated)
 
 
 @router.delete("/{question_id}", status_code=status.HTTP_204_NO_CONTENT)

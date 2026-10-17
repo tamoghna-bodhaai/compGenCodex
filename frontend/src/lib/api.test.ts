@@ -43,6 +43,17 @@ describe("apiRequest", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/papers/paper-1/comparison", expect.any(Object));
   });
 
+  it("submits an explicit source-review approval", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "question-1", verification_status: "approved" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const { api } = await import("@/lib/api");
+
+    await api.approveQuestion("question-1", "Checked against source");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/questions/question-1/approve", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ note: "Checked against source" }),
+    }));
+  });
+
   it("forwards cancellation signals from read helpers", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "paper-1" }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const controller = new AbortController();

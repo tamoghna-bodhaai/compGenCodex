@@ -249,6 +249,10 @@ export interface SeedQuestion {
   question_type: QuestionType;
   difficulty: number;
   verification_status: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_note?: string | null;
+  approval_provenance?: "human_review" | "legacy_publication" | null;
   question_json: QuestionJson;
   answer_json?: { correct_answer?: string | null } | null;
   diagrams?: QuestionDiagram[];

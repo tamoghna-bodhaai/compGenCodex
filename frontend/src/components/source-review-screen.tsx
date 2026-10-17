@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import type { BankSolutionJob, IngestionReport, SeedQuestion } from "@/lib/types";
 import { useWorkspace } from "@/context/workspace-context";
 import { MathContent } from "@/components/math-content";
-import { Button, EmptyState, Field, PageHeader, Textarea } from "@/components/ui";
+import { Button, EmptyState, Field, Input, PageHeader, Textarea } from "@/components/ui";
 import s from "@/styles/ui.module.css";
 
 function hasAnswer(answer: unknown): boolean {
@@ -16,8 +16,50 @@ function hasAnswer(answer: unknown): boolean {
   return answer != null;
 }
 
-function Question({ item, label, generation, remove }: { item: SeedQuestion; label: string; generation?: BankSolutionJob["items"][number]; remove: () => void }) {
+function answerText(answer: unknown): string {
+  return typeof answer === "object" && answer !== null ? JSON.stringify(answer) : String(answer ?? "");
+}
+
+function parsedAnswer(value: string): unknown {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (normalized.startsWith("[") || normalized.startsWith("{")) return JSON.parse(normalized);
+  return normalized;
+}
+
+function Question({ item, label, generation, remove, reload, notify }: { item: SeedQuestion; label: string; generation?: BankSolutionJob["items"][number]; remove: () => void; reload: () => Promise<void>; notify: (message: string, tone?: "error") => void }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
   const solutionStatus = generation?.state === "failed" ? "Generation failed" : generation?.state === "running" ? "Generating…" : generation?.state === "queued" ? "Waiting in queue…" : "Not available";
+  async function save(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy(true);
+    try {
+      await api.updateQuestion(item.id, {
+        stem: String(form.get("stem") || ""),
+        options: String(form.get("options") || "").split("\n").map((value) => value.trim()).filter(Boolean),
+        correct_answer: parsedAnswer(String(form.get("answer") || "")),
+        solution: String(form.get("solution") || "").trim() || null,
+      });
+      await reload();
+      setEditing(false);
+      notify("Question saved and returned to pending review.");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "Couldn’t save the question.", "error");
+    } finally { setBusy(false); }
+  }
+  async function decide(action: "approve" | "reject") {
+    setBusy(true);
+    try {
+      if (action === "approve") await api.approveQuestion(item.id);
+      else await api.rejectQuestion(item.id);
+      await reload();
+      notify(action === "approve" ? "Question approved for publication." : "Question rejected and removed from publication.");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : `Couldn’t ${action} the question.`, "error");
+    } finally { setBusy(false); }
+  }
   return <article className={s.sourceReviewQuestion}>
     <header><strong>{label}</strong><span>{[item.chapter, item.topic, item.subtopic].filter(Boolean).join(" / ")}</span></header>
     <div className={s.sourceReviewQuestionBody}>
@@ -26,7 +68,7 @@ function Question({ item, label, generation, remove }: { item: SeedQuestion; lab
         <MathContent as="div" className={s.detailStem} value={item.question_json.stem} />
         {item.diagrams?.filter((d) => d.option_index == null).map((d) => d.url ? <img key={d.id} className={s.questionDiagram} src={d.url} alt={d.description} /> : <p key={d.id}>Diagram unavailable: {d.validation_notes || d.validation_status}</p>)}
         {!!item.question_json.options?.length && <ol className={s.sourceReviewOptions} type="A">{item.question_json.options.map((option, index) => <li key={index}><MathContent as="div" value={option} />{item.diagrams?.filter((d) => d.option_index === index && d.url).map((d) => <img key={d.id} className={s.questionDiagram} src={d.url!} alt={d.description} />)}</li>)}</ol>}
-        <div className={s.chipRow}><span className={s.chip}>Format: {item.response_spec?.mode || item.question_type}</span><span className={s.chip}>Review: {item.verification_status.replaceAll("_", " ")}</span></div>
+        <div className={s.chipRow}><span className={s.chip}>Format: {item.response_spec?.mode || item.question_type}</span><span className={s.chip}>Review: {item.verification_status.replaceAll("_", " ")}</span>{item.approval_provenance === "legacy_publication" && <span className={s.chip}>Legacy approval</span>}</div>
       </div>
       <section className={s.sourceReviewSolution} aria-label={`Solution for ${label}`}>
         {hasAnswer(item.answer_json?.correct_answer) ? <p><strong>Answer: </strong><MathContent value={typeof item.answer_json?.correct_answer === "object" ? JSON.stringify(item.answer_json.correct_answer) : String(item.answer_json?.correct_answer)} /></p> : <p><strong>Answer: </strong>Not recorded</p>}
@@ -36,7 +78,19 @@ function Question({ item, label, generation, remove }: { item: SeedQuestion; lab
         </details>
       </section>
     </div>
-    <Button size="small" tone="danger" onClick={remove}>Delete question</Button>
+    {editing && <form className={s.formGrid} onSubmit={(event) => void save(event)}>
+      <Field label="Question stem"><Textarea name="stem" defaultValue={item.question_json.stem} required /></Field>
+      <Field label="Options" hint="One option per line; leave empty for numerical questions."><Textarea name="options" defaultValue={(item.question_json.options || []).join("\n")} /></Field>
+      <Field label="Correct answer" hint="Use plain text, or JSON for multiple/matching answers."><Input name="answer" defaultValue={answerText(item.answer_json?.correct_answer)} /></Field>
+      <Field label="Solution"><Textarea name="solution" defaultValue={item.solution || ""} /></Field>
+      <div className={s.chipRow}><Button size="small" type="submit" tone="primary" disabled={busy}>{busy ? "Saving…" : "Save correction"}</Button><Button size="small" type="button" onClick={() => setEditing(false)} disabled={busy}>Cancel</Button></div>
+    </form>}
+    <div className={s.chipRow}>
+      <Button size="small" onClick={() => setEditing((value) => !value)} disabled={busy}>{editing ? "Close editor" : "Edit question"}</Button>
+      {item.verification_status !== "approved" && <Button size="small" tone="primary" onClick={() => void decide("approve")} disabled={busy || !hasAnswer(item.answer_json?.correct_answer)}>Approve</Button>}
+      {item.verification_status !== "rejected" && <Button size="small" onClick={() => void decide("reject")} disabled={busy}>Reject</Button>}
+      <Button size="small" tone="danger" onClick={remove} disabled={busy}>Delete question</Button>
+    </div>
   </article>;
 }
 
@@ -130,7 +184,7 @@ export function SourceReviewScreen({ jobId }: { jobId: string }) {
     {error ? <EmptyState title="Couldn’t load source review" description={error} action={<Button onClick={() => void load()}>Retry</Button>} /> : !report ? <EmptyState title="Loading source review" description="Reading source questions…" /> : <div className={s.sourceReviewLayout}>
       <section className={s.sourceReviewTools}>
         <p>{report.summary.accepted} accepted · {report.summary.review_needed} review needed · {report.summary.diagrams} diagrams · {report.chunks.length} extraction chunks</p>
-        <p aria-live="polite">{missingAnswers.length === 0 ? `All ${report.questions.length} questions have recorded answers.` : `${missingAnswers.length} of ${report.questions.length} questions missing recorded answers: ${missingAnswers.map((question) => questionLabels.get(question.id)).join(", ")}. Map answers below, or choose to publish without them.`}</p>
+        <p aria-live="polite">{missingAnswers.length === 0 ? `All ${report.questions.length} questions have recorded answers.` : `${missingAnswers.length} of ${report.questions.length} questions missing recorded answers: ${missingAnswers.map((question) => questionLabels.get(question.id)).join(", ")}. Map or enter answers before approval.`}</p>
         <div className={s.chipRow}>{Object.entries(report.formats).map(([key, count]) => <span className={s.chip} key={key}>{key}: {count}</span>)}</div>
         <details><summary>Taxonomy and groups</summary>{Object.entries(report.taxonomy).map(([key, count]) => <p key={key}>{key}: {count}</p>)}{Object.entries(report.groups).map(([key, count]) => <p key={key}>Group {key}: {count}</p>)}</details>
         <div className={s.sourceReviewFilters}>{(["chapter", "topic", "subtopic"] as const).map((key) => <label key={key}>{key[0].toUpperCase() + key.slice(1)}<select className={s.input} value={filter[key]} onChange={(event) => setFilter((current) => ({ ...current, [key]: event.target.value, ...(key === "chapter" ? { topic: "", subtopic: "" } : key === "topic" ? { subtopic: "" } : {}) }))}><option value="">All</option>{[...new Set(report.questions.filter((q) => (key === "chapter" || !filter.chapter || q.chapter === filter.chapter) && (key !== "subtopic" || !filter.topic || q.topic === filter.topic)).map((q) => q[key]).filter(Boolean))].map((value) => <option key={value} value={value!}>{value}</option>)}</select></label>)}</div>
@@ -142,7 +196,7 @@ export function SourceReviewScreen({ jobId }: { jobId: string }) {
         {report.mappings.some((m) => m.status !== "matched") && <details open><summary>Unmatched or ambiguous answer entries</summary>{report.mappings.filter((m) => m.status !== "matched").map((m) => <form key={m.id} className={s.chipRow} onSubmit={(event) => { event.preventDefault(); const id = String(new FormData(event.currentTarget).get("question_id") || ""); void api.resolveSourceMapping(jobId, m.id, id).then(async () => { await load(); toast("Answer mapped."); }).catch((caught) => toast(caught instanceof Error ? caught.message : "Couldn’t map answer.", "error")); }}><span>Q{m.source_question_number}: {m.status} — {m.note}</span><select className={s.input} name="question_id" aria-label={`Map answer ${m.source_question_number} to question`}>{report.questions.map((q) => <option key={q.id} value={q.id}>Q{q.source_question_number}: {q.question_json.stem.slice(0, 45)}</option>)}</select><Button size="small" type="submit">Map</Button></form>)}</details>}
         {report.candidates.filter((c) => c.status === "review").map((c) => <details key={c.id}><summary>Q{c.source_question_number}: {c.validation_notes}</summary><form className={s.formGrid} onSubmit={(event) => { event.preventDefault(); let changes: Record<string, unknown>; try { changes = JSON.parse(String(new FormData(event.currentTarget).get("changes") || "{}")); } catch { toast("Review edits must be valid JSON.", "error"); return; } void api.promoteCandidate(jobId, c.id, changes).then(async () => { await load(); await refresh(); toast("Question promoted."); }).catch((caught) => toast(caught instanceof Error ? caught.message : "Couldn’t promote question.", "error")); }}><Field label="Correct transcription or response rules (JSON fields)"><Textarea name="changes" defaultValue={JSON.stringify({ stem: c.payload.stem, response_spec: c.payload.response_spec, format_uncertain: c.payload.format_uncertain }, null, 2)} /></Field><Button type="submit" size="small">Accept after review</Button></form></details>)}
       </section>
-      <section className={s.sourceReviewQuestions} aria-label="Source questions"><h2>Questions ({questions.length})</h2>{questions.length ? questions.map((q) => <Question key={q.id} item={q} label={questionLabels.get(q.id) || "Question"} generation={generationByQuestion.get(q.id)} remove={() => { if (!window.confirm("Delete this question?")) return; void api.deleteQuestion(q.id).then(async () => { await load(); await refresh(); toast("Question deleted."); }).catch((caught) => toast(caught instanceof Error ? caught.message : "Couldn’t delete question.", "error")); }} />) : <EmptyState title="No questions match these filters" description="Choose another chapter, topic, or subtopic." />}</section>
+      <section className={s.sourceReviewQuestions} aria-label="Source questions"><h2>Questions ({questions.length})</h2>{questions.length ? questions.map((q) => <Question key={q.id} item={q} label={questionLabels.get(q.id) || "Question"} generation={generationByQuestion.get(q.id)} reload={async () => { await load(); await refresh(); }} notify={toast} remove={() => { if (!window.confirm("Delete this question?")) return; void api.deleteQuestion(q.id).then(async () => { await load(); await refresh(); toast("Question deleted."); }).catch((caught) => toast(caught instanceof Error ? caught.message : "Couldn’t delete question.", "error")); }} />) : <EmptyState title="No questions match these filters" description="Choose another chapter, topic, or subtopic." />}</section>
     </div>}
   </section>;
 }

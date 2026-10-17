@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS questions (
   answer_provenance TEXT,
   solution_provenance TEXT,
   verification_status TEXT NOT NULL DEFAULT 'pending',
+  reviewed_by UUID,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT,
+  approval_provenance TEXT,
   embedding vector(1536),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

@@ -68,8 +68,7 @@ export function AdminScreen() {
     const values = new FormData(form);
     const source_job_id = String(values.get("source_job_id") || "").trim() || undefined;
     const question_ids = String(values.get("question_ids") || "").split(/[\s,]+/).filter(Boolean);
-    const allow_missing_answers = values.has("allow_missing_answers");
-    try { const result = await api.publishBank(bankId, { source_job_id, question_ids, allow_missing_answers }); form.reset(); const confirmation = `Published ${result.published_count} question${result.published_count === 1 ? "" : "s"}.${result.missing_answer_count ? ` ${result.missing_answer_count} without recorded answers.` : ""}`; setNotice(confirmation); try { await load(); } catch { setNotice(`${confirmation} Refresh the page to update the bank list.`); } } catch (e) { setError(message(e)); } finally { setBusy(false); }
+    try { const result = await api.publishBank(bankId, { source_job_id, question_ids }); form.reset(); const confirmation = `Published ${result.published_count} question${result.published_count === 1 ? "" : "s"}.`; setNotice(confirmation); try { await load(); } catch { setNotice(`${confirmation} Refresh the page to update the bank list.`); } } catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
   async function manageTeacher(teacher: TeacherAccount, action: "status" | "code") {
     const access_code = action === "code" ? window.prompt(`New five-digit code for ${teacher.name}`) : null;
@@ -105,7 +104,7 @@ export function AdminScreen() {
             <p>{source.question_count}{source.source_question_count != null ? ` of ${source.source_question_count}` : ""} in this bank · {source.missing_answer_count} missing answers · {source.missing_solution_count} missing solutions</p>
           </div>)}</div>
         </div> : <p className={s.muted}>No questions published in this bank yet.</p>}
-        <form className={s.form} onSubmit={event => void publish(event, bank.id)}><Select name="source_job_id" defaultValue=""><option value="">Choose a completed source</option>{sources.map(source => <option key={source.id} value={source.id}>{source.source_name}</option>)}</Select><Input name="question_ids" placeholder="Or question IDs, comma separated" /><label className={s.check}><input type="checkbox" name="allow_missing_answers" />Publish even if answers are missing</label><p className={s.muted}>Questions without answers need answers before they can be used in automatically scored tests.</p><Button size="small" type="submit" disabled={busy}>Publish questions</Button></form>
+        <form className={s.form} onSubmit={event => void publish(event, bank.id)}><Select name="source_job_id" defaultValue=""><option value="">Choose a completed source</option>{sources.map(source => <option key={source.id} value={source.id}>{source.source_name}</option>)}</Select><Input name="question_ids" placeholder="Or question IDs, comma separated" /><p className={s.muted}>Every selected question must have a recorded answer and explicit source-review approval.</p><Button size="small" type="submit" disabled={busy}>Publish questions</Button></form>
       </div>)}</div>
     </section></div>
   </section>;
