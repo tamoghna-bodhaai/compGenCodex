@@ -7,7 +7,11 @@ class LoginRequest(BaseModel):
 
 
 class SessionUser(BaseModel):
+    id: str | None = None
     email: str
+    name: str | None = None
+    role: str | None = None
+    status: str | None = None
 
 
 class SessionResponse(BaseModel):

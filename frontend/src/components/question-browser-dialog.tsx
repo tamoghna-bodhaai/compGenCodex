@@ -14,7 +14,7 @@ function breadcrumb(selection: BankSelection) {
 }
 
 function QuestionDetail({ question, onClose, onChange }: { question: SeedQuestion | null; onClose: () => void; onChange: (question: SeedQuestion) => void }) {
-  const { toast } = useWorkspace();
+  const { toast, role } = useWorkspace();
   const [solving, setSolving] = useState(false);
   async function generateSolution() {
     if (!question) return;
@@ -41,7 +41,7 @@ function QuestionDetail({ question, onClose, onChange }: { question: SeedQuestio
       {question.response_spec && <div><p>Response: {question.response_spec.mode} {question.response_spec.min_selections != null ? `· select ${question.response_spec.min_selections}–${question.response_spec.max_selections}` : ""}</p>{question.response_spec.instructions && <p>{question.response_spec.instructions}</p>}{question.response_spec.marking?.source_instructions && <p>Marking: {question.response_spec.marking.source_instructions}</p>}{question.response_spec.numeric && <p>Numeric rule: {question.response_spec.numeric.integer_only ? "integer only" : "decimal allowed"}{question.response_spec.numeric.permitted_precision != null ? `, ${question.response_spec.numeric.permitted_precision} decimal places` : ""}</p>}{question.response_spec.list_i?.length ? <p>List I: {question.response_spec.list_i.join("; ")} · List II: {question.response_spec.list_ii?.join("; ")}</p> : null}</div>}
       <div className={s.rule} /><p>Source: {question.source_reference || question.source || "Not stated"}</p><p>Review state: {question.verification_status.replaceAll("_", " ")}</p>
       <p>{question.answer_json?.correct_answer ? <>Recorded answer ({question.answer_provenance || "unspecified"}): <strong>{typeof question.answer_json.correct_answer === "string" ? question.answer_json.correct_answer : JSON.stringify(question.answer_json.correct_answer)}</strong></> : "No recorded answer; verify against the original source."}</p>{question.solution && <MathContent as="p" value={question.solution} />}
-      {question.response_spec?.supported_for_generation && question.solution_provenance !== "source" && <Button size="small" disabled={solving} onClick={() => void generateSolution()}>{solving ? "Generating…" : question.solution ? "Retry AI solution" : "Generate solution"}</Button>}
+      {role === "admin" && question.response_spec?.supported_for_generation && question.solution_provenance !== "source" && <Button size="small" disabled={solving} onClick={() => void generateSolution()}>{solving ? "Generating…" : question.solution ? "Retry AI solution" : "Generate solution"}</Button>}
     </div>}</div>
   </Dialog>;
 }

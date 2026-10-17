@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 
 from app.schemas.papers import (
     AddManualQuestionRequest,
+    AddBankQuestionRequest,
     LockRequest,
     PaperCreateRequest,
     PaperExportRequest,
@@ -287,6 +288,14 @@ def add_manual_question(paper_id: str, request: AddManualQuestionRequest) -> dic
     try:
         return PaperService().add_manual_question(paper_id, request)
     except PaperNotFoundError as error:
+        _raise(error)
+
+
+@router.post("/{paper_id}/questions/from-bank", status_code=status.HTTP_201_CREATED)
+def add_bank_question(paper_id: str, request: AddBankQuestionRequest) -> dict:
+    try:
+        return PaperService().add_bank_question(paper_id, request.seed_question_id, request.section_id)
+    except (PaperNotFoundError, PaperConflictError) as error:
         _raise(error)
 
 

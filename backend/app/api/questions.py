@@ -3,12 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, status
 
 from app.db.database import decode_question_row, get_connection
+from app.core.auth import current_user_context
 from app.services.ingestion import IngestionError, MAX_UPLOAD_BYTES, QuestionIngestionService
 from app.services.openrouter import ModelConfigurationError, OpenRouterError
 from app.services.costs import cost_summary
 from app.services.diagrams import diagrams_for
 from app.services.source_material import add_attachment, attachment_text, delete_question as remove_bank_question, map_manually, promote_candidate
-from app.services.bank_solutions import queue_solution_job, get_solution_job, run_solution_job
+from app.services.bank_solutions import queue_solution_job, get_solution_job, latest_source_solution_job, run_solution_job
 from pydantic import BaseModel, Field
 from pathlib import Path
 import tempfile
@@ -223,8 +224,14 @@ def generate_bank_solutions(scope: SolutionScope, background_tasks: BackgroundTa
         job = queue_solution_job(**scope.model_dump())
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    background_tasks.add_task(run_solution_job, job["id"])
+    if job["state"] == "queued" and not job.get("reused"):
+        background_tasks.add_task(run_solution_job, job["id"])
     return {"job": job}
+
+
+@router.get("/solution-jobs")
+def source_solution_job(source_job_id: str) -> dict:
+    return {"job": latest_source_solution_job(source_job_id)}
 
 
 @router.get("/solution-jobs/{job_id}")
@@ -273,6 +280,9 @@ def list_questions(
         if value is not None:
             clauses.append(f"{column} = ?")
             parameters.append(value)
+    actor = current_user_context.get()
+    if actor and actor["role"] != "admin":
+        clauses.append("published = 1")
     for path, value in (("paper", paper), ("section", section), ("mode", response_mode)):
         if value is not None:
             column = "exam_format_json" if path != "mode" else "response_spec_json"
@@ -308,10 +318,11 @@ def question_catalog(supported_only: bool = False) -> dict:
             SELECT exam, subject, chapter, topic, subtopic, question_type, difficulty, COUNT(*) AS count
             FROM questions
             WHERE (? = 0 OR response_spec_json IS NULL OR json_extract(response_spec_json, '$.supported_for_generation') = 1)
+              AND (? = 0 OR published = 1)
             GROUP BY exam, subject, chapter, topic, subtopic, question_type, difficulty
             ORDER BY exam, subject, chapter, topic, subtopic, question_type, difficulty
             """,
-            (int(supported_only),),
+            (int(supported_only), int(bool(current_user_context.get() and current_user_context.get()["role"] != "admin"))),
         ).fetchall()
     return {"items": [dict(row) for row in rows]}
 
@@ -320,7 +331,8 @@ def question_catalog(supported_only: bool = False) -> dict:
 def get_question(question_id: str) -> dict:
     with get_connection() as connection:
         row = connection.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
-    if row is None:
+    actor = current_user_context.get()
+    if row is None or (actor and actor["role"] != "admin" and not row["published"]):
         raise HTTPException(status_code=404, detail="Question not found")
     item = decode_question_row(row)
     item["diagrams"] = diagrams_for(owner_column="seed_question_id", owner_id=item["id"])

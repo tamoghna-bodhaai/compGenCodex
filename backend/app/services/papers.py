@@ -7,12 +7,13 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from app.db.database import decode_question_row, get_connection
+from app.core.auth import current_user_context
 from app.core.error_safety import safe_error_message
 from app.schemas.generation import GeneratedSlotResult, GenerationRequest, GenerationSlot
 from app.schemas.papers import AddManualQuestionRequest, PaperCreateRequest, PaperQuestionInput, PaperUpdateRequest, QuestionEditRequest
 from app.services.generation import GenerationService
 from app.services.lifecycle import emit_event, events_for_job
-from app.services.diagrams import diagrams_for, generate_diagram, store_diagram
+from app.services.diagrams import diagrams_for, generate_diagram, store_diagram, asset_path
 
 
 class PaperNotFoundError(RuntimeError):
@@ -95,8 +96,8 @@ class PaperService:
         now = _now()
         with get_connection() as connection:
             connection.execute(
-                "INSERT INTO papers (id, title, exam, subject, generation_config, branding_config, branding_template_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (paper_id, request.title, request.exam, request.subject, request.model_dump_json(), "{}", None, "draft", now, now),
+                "INSERT INTO papers (id, title, exam, subject, generation_config, branding_config, branding_template_id, status, created_at, updated_at, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (paper_id, request.title, request.exam, request.subject, request.model_dump_json(), "{}", None, "draft", now, now, (current_user_context.get() or {}).get("id")),
             )
         if request.subtopic_plans:
             self._ensure_plan_sections(paper_id, request)
@@ -113,12 +114,15 @@ class PaperService:
             placeholders = ",".join("?" for _ in plan.seed_question_ids)
             with get_connection() as connection:
                 rows = connection.execute(
-                    f"SELECT id, exam, subject, chapter, topic, subtopic FROM questions WHERE id IN ({placeholders})",
+                    f"SELECT id, exam, subject, chapter, topic, subtopic, published FROM questions WHERE id IN ({placeholders})",
                     plan.seed_question_ids,
                 ).fetchall()
             if len(rows) != len(plan.seed_question_ids):
                 raise PaperConflictError("One or more selected source questions are no longer available.")
             for row in rows:
+                actor = current_user_context.get()
+                if actor and actor["role"] != "admin" and not row["published"]:
+                    raise PaperConflictError("A selected source question is not published.")
                 if row["exam"] != request.exam or row["subject"] != request.subject or row["topic"] != plan.topic:
                     raise PaperConflictError("A selected source question is outside this section's taxonomy.")
                 if plan.subtopic is not None and row["subtopic"] != plan.subtopic:
@@ -128,13 +132,17 @@ class PaperService:
 
     def list(self) -> list[dict]:
         with get_connection() as connection:
-            rows = connection.execute("SELECT * FROM papers ORDER BY updated_at DESC").fetchall()
+            actor = current_user_context.get()
+            rows = connection.execute("SELECT * FROM papers WHERE owner_id=? ORDER BY updated_at DESC", (actor["id"],)).fetchall() if actor and actor["role"] != "admin" else connection.execute("SELECT * FROM papers ORDER BY updated_at DESC").fetchall()
             return [self._summary(_decode(row), connection) for row in rows]
 
     def get(self, paper_id: str) -> dict:
         with get_connection() as connection:
             row = connection.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
             if row is None:
+                raise PaperNotFoundError("Paper not found")
+            actor = current_user_context.get()
+            if actor and actor["role"] != "admin" and row["owner_id"] != actor["id"]:
                 raise PaperNotFoundError("Paper not found")
             paper = _decode(row)
             sections = [_decode(section) for section in connection.execute(
@@ -241,6 +249,31 @@ class PaperService:
                     json.dumps({"origin": "manual"}), now, now,
                 ),
             )
+        return self.get(paper_id)
+
+    def add_bank_question(self, paper_id: str, seed_question_id: str, section_id: str | None = None) -> dict:
+        self._ensure_paper(paper_id)
+        if section_id:
+            self._ensure_section(paper_id, section_id)
+        with get_connection() as connection:
+            source = connection.execute("SELECT * FROM questions WHERE id=?", (seed_question_id,)).fetchone()
+        actor = current_user_context.get()
+        if source is None or (actor and actor["role"] != "admin" and not source["published"]):
+            raise PaperNotFoundError("Bank question not found")
+        seed = decode_question_row(source)
+        question_id, now = str(uuid.uuid4()), _now()
+        with get_connection() as connection:
+            position = self._next_question_position(connection, paper_id, section_id)
+            connection.execute(
+                "INSERT INTO paper_questions(id,paper_id,section_id,position,question_json,answer_json,solution,question_type,difficulty,locked,generation_metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?)",
+                (question_id,paper_id,section_id,position,json.dumps(seed["question_json"]),json.dumps(seed["answer_json"]) if seed.get("answer_json") else None,seed.get("solution"),seed["question_type"],seed["difficulty"],json.dumps({"origin":"bank","seed_question_id":seed_question_id,"response_spec":seed.get("response_spec"),"exam_format":seed.get("exam_format")}),now,now),
+            )
+        for diagram in diagrams_for(owner_column="seed_question_id", owner_id=seed_question_id):
+            path = asset_path(diagram)
+            store_diagram(owner_column="paper_question_id",owner_id=question_id,provenance=diagram["provenance"],
+                          data=path.read_bytes() if path else None,description=diagram["description"],
+                          render_spec=diagram.get("render_spec") or "",validation_status=diagram["validation_status"],
+                          validation_notes=diagram.get("validation_notes") or "",option_index=diagram.get("option_index"))
         return self.get(paper_id)
 
     def edit_question(self, paper_id: str, question_id: str, request: QuestionEditRequest) -> dict:
@@ -574,8 +607,8 @@ class PaperService:
         paper_id, now = str(uuid.uuid4()), _now()
         with get_connection() as connection:
             connection.execute(
-                "INSERT INTO papers (id, title, exam, subject, generation_config, branding_config, branding_template_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (paper_id, title, exam, subject, json.dumps(generation_config), "{}", None, "draft", now, now),
+                "INSERT INTO papers (id, title, exam, subject, generation_config, branding_config, branding_template_id, status, created_at, updated_at, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (paper_id, title, exam, subject, json.dumps(generation_config), "{}", None, "draft", now, now, (current_user_context.get() or {}).get("id")),
             )
         return self.get(paper_id)
 
@@ -1054,6 +1087,12 @@ class PaperService:
             "validation": result.validation.model_dump(),
             "symbolic_verification": result.symbolic_verification.model_dump() if result.symbolic_verification else None,
         }
+        if result.primary_seed_question_id:
+            with get_connection() as connection:
+                seed_rules = connection.execute("SELECT response_spec_json,exam_format_json FROM questions WHERE id=?", (result.primary_seed_question_id,)).fetchone()
+            if seed_rules:
+                metadata["response_spec"] = json.loads(seed_rules["response_spec_json"]) if seed_rules["response_spec_json"] else None
+                metadata["exam_format"] = json.loads(seed_rules["exam_format_json"]) if seed_rules["exam_format_json"] else None
         if result.reference_question_id is not None:
             metadata["reference_mapping"] = {
                 "reference_question_id": result.reference_question_id,

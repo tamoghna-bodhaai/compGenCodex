@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Icon } from "@/components/icons";
 import { LegacyHashRedirect } from "@/components/legacy-hash-redirect";
 import { WorkspaceProvider } from "@/context/workspace-context";
 import { api } from "@/lib/api";
+import type { SessionAccount } from "@/lib/types";
 import s from "@/styles/ui.module.css";
 
 const nav = [
@@ -16,11 +18,12 @@ const nav = [
   { href: "/archive", label: "Export archive", icon: "archive" as const },
 ];
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children, user }: { children: React.ReactNode; user: SessionAccount }) {
   const pathname = usePathname();
   const router = useRouter();
   if (pathname === "/login") return <>{children}</>;
-  const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/ingestion" ? "Ingestion" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
+  const routeName = pathname.startsWith("/papers/") ? "Paper editor" : pathname.startsWith("/tests") ? "Tests" : pathname.startsWith("/student") ? "My tests" : pathname === "/new-paper" ? "Create paper" : pathname === "/question-bank" ? "Question bank" : pathname === "/ingestion" ? "Ingestion" : pathname === "/branding" ? "Branding" : pathname === "/archive" ? "Export archive" : "Dashboard";
+  const navigation = user.role === "student" ? [{ href: "/student", label: "My tests", icon: "document" as const }] : [...nav.filter(item => user.role === "admin" || !["/ingestion", "/archive", "/branding"].includes(item.href)), { href: "/tests", label: "Tests & classes", icon: "document" as const }, ...(user.role === "admin" ? [{ href: "/admin", label: "Admin", icon: "library" as const }] : [])];
   const signOut = async () => {
     try {
       await api.logout();
@@ -33,15 +36,15 @@ function Shell({ children }: { children: React.ReactNode }) {
   };
   return <div className={s.shell}>
     <aside className={s.sidebar}>
-      <Link className={s.brand} href="/" aria-label="Go to Paper Studio dashboard"><span className={s.brandMark}><Icon name="document" /></span><span><strong>Paper Studio</strong><small>JEE workspace</small></span></Link>
-      <div className={s.navSection}><span className={s.navLabel}>Workspace</span><nav aria-label="Workspace navigation">{nav.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} className={`${s.navLink} ${active ? s.navActive : ""}`} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>; })}</nav></div>
-      <Link className={s.sidebarCta} href="/new-paper"><Icon name="plus" />New paper</Link>
+      <Link className={s.brand} href={user.role === "student" ? "/student" : "/"} aria-label="Go to Paper Studio"><span className={s.brandMark}><Icon name="document" /></span><span><strong>Paper Studio</strong><small>JEE workspace</small></span></Link>
+      <div className={s.navSection}><span className={s.navLabel}>Workspace</span><nav aria-label="Workspace navigation">{navigation.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} className={`${s.navLink} ${active ? s.navActive : ""}`} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>; })}</nav></div>
+      {user.role !== "student" && <Link className={s.sidebarCta} href="/new-paper"><Icon name="plus" />New paper</Link>}
       <div className={s.sidebarSpacer} />
-      <div className={s.sidebarFoot}><span>Question Paper Generator</span><small>Focused tools for educators</small></div>
+      <div className={s.sidebarFoot}><span>{user.name}</span><small>{user.role === "admin" ? "Super admin" : user.role === "teacher" ? "Teacher" : "Student"}</small></div>
     </aside>
     <main className={s.workspace}>
-      <header className={s.topbar}><div className={s.breadcrumb}><Icon name="document" /><span>Paper Studio</span><Icon name="chevron" /><strong>{routeName}</strong></div><div className={s.topbarActions}><Link href="/new-paper" className={s.topbarAction}><Icon name="plus" />New paper</Link><button className={s.signOut} type="button" onClick={() => void signOut()}>Sign out</button></div></header>
-      <nav className={s.mobileNav} aria-label="Workspace navigation">{nav.map((item) => <Link key={item.href} className={(item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ? s.mobileActive : ""} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>)}<Link className={pathname === "/new-paper" ? s.mobileActive : ""} href="/new-paper"><Icon name="plus" /><span>New paper</span></Link></nav>
+      <header className={s.topbar}><div className={s.breadcrumb}><Icon name="document" /><span>Paper Studio</span><Icon name="chevron" /><strong>{routeName}</strong></div><div className={s.topbarActions}>{user.role !== "student" && <Link href="/new-paper" className={s.topbarAction}><Icon name="plus" />New paper</Link>}<button className={s.signOut} type="button" onClick={() => void signOut()}>Sign out</button></div></header>
+      <nav className={s.mobileNav} aria-label="Workspace navigation">{navigation.map((item) => <Link key={item.href} className={(item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ? s.mobileActive : ""} href={item.href}><Icon name={item.icon} /><span>{item.label}</span></Link>)}</nav>
       {children}
     </main>
     <LegacyHashRedirect />
@@ -50,6 +53,10 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [user, setUser] = useState<SessionAccount | null>(null);
+  useEffect(() => { if (pathname === "/login") return; let active = true; api.session().then(result => { if (!active) return; if (!result.user) router.replace("/login"); else { setUser(result.user); if (result.user.role === "student" && !pathname.startsWith("/student")) router.replace("/student"); if (result.user.role !== "student" && pathname.startsWith("/student")) router.replace("/"); if (result.user.role === "teacher" && (pathname.startsWith("/admin") || pathname.startsWith("/ingestion") || pathname.startsWith("/archive") || pathname.startsWith("/branding"))) router.replace("/"); } }).catch(() => { if (active) router.replace("/login"); }); return () => { active = false; }; }, [pathname, router]);
   if (pathname === "/login") return <>{children}</>;
-  return <WorkspaceProvider><Shell>{children}</Shell></WorkspaceProvider>;
+  if (!user) return <main style={{ padding: 40 }}>Opening workspace…</main>;
+  return <WorkspaceProvider role={user.role}><Shell user={user}>{children}</Shell></WorkspaceProvider>;
 }

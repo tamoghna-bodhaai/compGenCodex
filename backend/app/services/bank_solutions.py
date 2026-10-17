@@ -35,22 +35,50 @@ def queue_solution_job(*, source_job_id: str | None = None, question_ids: list[s
         clauses.append(f"id IN ({','.join('?' for _ in question_ids)})")
         params.extend(question_ids)
     with get_connection() as connection:
-        rows = connection.execute(f"SELECT id FROM questions WHERE {' AND '.join(clauses)}", params).fetchall()
+        if source_job_id:
+            active = connection.execute(
+                "SELECT id FROM bank_solution_jobs WHERE source_job_id = ? AND state IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
+                (source_job_id,),
+            ).fetchone()
+            if active:
+                return {**get_solution_job(active["id"]), "reused": True}
+        rows = connection.execute(
+            f"SELECT id FROM questions WHERE {' AND '.join(clauses)} ORDER BY source_question_number, id",
+            params,
+        ).fetchall()
         ids = [row["id"] for row in rows]
         identifier, now = str(uuid.uuid4()), _now()
         connection.execute("INSERT INTO bank_solution_jobs (id, source_job_id, scope_json, state, total_questions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                           (identifier, source_job_id, json.dumps({"question_ids": ids}), "queued", len(ids), now, now))
+                           (identifier, source_job_id, json.dumps({"question_ids": ids}), "queued" if ids else "succeeded", len(ids), now, now))
+        connection.executemany(
+            "INSERT INTO bank_solution_job_items (job_id, question_id, position, state, updated_at) VALUES (?, ?, ?, 'queued', ?)",
+            ((identifier, question_id, position, now) for position, question_id in enumerate(ids)),
+        )
     return get_solution_job(identifier)
 
 
 def get_solution_job(job_id: str) -> dict:
     with get_connection() as connection:
         row = connection.execute("SELECT * FROM bank_solution_jobs WHERE id = ?", (job_id,)).fetchone()
+        items = connection.execute(
+            "SELECT question_id, state, error_message FROM bank_solution_job_items WHERE job_id = ? ORDER BY position",
+            (job_id,),
+        ).fetchall()
     if row is None:
         raise LookupError("Solution job not found.")
     result = dict(row)
     result["scope"] = json.loads(result.pop("scope_json"))
+    result["items"] = [dict(item) for item in items]
     return result
+
+
+def latest_source_solution_job(source_job_id: str) -> dict | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT id FROM bank_solution_jobs WHERE source_job_id = ? ORDER BY created_at DESC LIMIT 1",
+            (source_job_id,),
+        ).fetchone()
+    return get_solution_job(row["id"]) if row else None
 
 
 async def run_solution_job(job_id: str) -> None:
@@ -60,15 +88,21 @@ async def run_solution_job(job_id: str) -> None:
     service = GenerationService()
     failures = []
     for identifier in job["scope"]["question_ids"]:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE bank_solution_job_items SET state = 'running', updated_at = ? WHERE job_id = ? AND question_id = ?",
+                (_now(), job_id, identifier),
+            )
+        item_error = None
         try:
             with get_connection() as connection:
                 row = connection.execute("SELECT * FROM questions WHERE id = ?", (identifier,)).fetchone()
             if row is None:
-                continue
+                raise LookupError("Question was deleted before its solution could be generated.")
             question = decode_question_row(row)
             spec = ResponseSpec.model_validate(question["response_spec"])
             if not spec.supported_for_generation:
-                continue
+                raise ValueError("This question is not eligible for solution generation.")
             result = await service.generate_solution({**question["question_json"], "response_spec": spec.model_dump()}, exam=question["exam"], subject=question["subject"])
             answer = result.correct_answer
             if spec.mode == "select" and spec.max_selections != 1 and isinstance(answer, str):
@@ -84,9 +118,14 @@ async def run_solution_job(job_id: str) -> None:
                     connection.execute("UPDATE questions SET answer_json = ?, solution = ?, answer_provenance = 'ai', solution_provenance = 'ai', verification_status = 'pending_review', updated_at = ? WHERE id = ?",
                                        (json.dumps({"correct_answer": answer}) if answer is not None else None, result.solution, _now(), identifier))
         except Exception as error:  # Continue the batch while reporting failures.
-            failures.append(f"{identifier}: {safe_error_message(error)}")
+            item_error = safe_error_message(error)
+            failures.append(f"{identifier}: {item_error}")
         finally:
             with get_connection() as connection:
+                connection.execute(
+                    "UPDATE bank_solution_job_items SET state = ?, error_message = ?, updated_at = ? WHERE job_id = ? AND question_id = ?",
+                    ("failed" if item_error else "succeeded", item_error, _now(), job_id, identifier),
+                )
                 connection.execute("UPDATE bank_solution_jobs SET completed_questions = completed_questions + 1, updated_at = ? WHERE id = ?", (_now(), job_id))
     with get_connection() as connection:
         connection.execute("UPDATE bank_solution_jobs SET state = ?, error_message = ?, updated_at = ? WHERE id = ?", ("failed" if failures else "succeeded", "; ".join(failures)[:1000] if failures else None, _now(), job_id))

@@ -7,11 +7,16 @@ import json
 import os
 import re
 import time
+import uuid
+from contextvars import ContextVar
+from datetime import UTC, datetime
 from dataclasses import dataclass
+from typing import Any
 
 
 SESSION_COOKIE_NAME = "paper_studio_session"
 ACCESS_CODE_PATTERN = re.compile(r"^\d{5}$")
+current_user_context: ContextVar[dict[str, Any] | None] = ContextVar("current_user", default=None)
 
 
 class AuthenticationConfigurationError(RuntimeError):
@@ -71,9 +76,9 @@ def _decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def create_session(email: str, settings: AuthSettings, now: int | None = None) -> str:
+def create_session(email: str, settings: AuthSettings, now: int | None = None, session_version: int = 0) -> str:
     issued_at = int(time.time()) if now is None else now
-    payload = {"email": email, "exp": issued_at + settings.session_ttl_seconds}
+    payload = {"email": email, "exp": issued_at + settings.session_ttl_seconds, "version": session_version}
     encoded_payload = _encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = hmac.new(settings.session_secret.encode("utf-8"), encoded_payload.encode("ascii"), hashlib.sha256).digest()
     return f"{encoded_payload}.{_encode(signature)}"
@@ -95,4 +100,64 @@ def verify_session(token: str | None, settings: AuthSettings, now: int | None = 
     expires_at = payload.get("exp")
     if not isinstance(email, str) or not isinstance(expires_at, int) or expires_at <= (int(time.time()) if now is None else now):
         return None
-    return email if hmac.compare_digest(email, settings.allowed_email) else None
+    return email
+
+
+def authenticated_account(token: str | None, settings: AuthSettings) -> dict[str, Any] | None:
+    email = verify_session(token, settings)
+    if not email:
+        return None
+    user = account_for_email(email)
+    if not user or user["status"] != "active":
+        return None
+    try:
+        payload = json.loads(_decode(token.split(".", 1)[0]))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return user if payload.get("version", 0) == user["session_version"] else None
+
+
+def hash_access_code(code: str, salt: bytes | None = None) -> str:
+    if not ACCESS_CODE_PATTERN.fullmatch(code):
+        raise ValueError("Access code must be five digits")
+    salt = salt or os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", code.encode(), salt, 300_000)
+    return f"{_encode(salt)}.{_encode(digest)}"
+
+
+def verify_access_code(code: str, encoded: str | None) -> bool:
+    if not encoded or "." not in encoded:
+        return False
+    try:
+        salt, expected = encoded.split(".", 1)
+        actual = hashlib.pbkdf2_hmac("sha256", code.encode(), _decode(salt), 300_000)
+        return hmac.compare_digest(actual, _decode(expected))
+    except (ValueError, UnicodeDecodeError):
+        return False
+
+
+def bootstrap_admin(settings: AuthSettings | None = None) -> dict[str, Any]:
+    from app.db.database import get_connection
+    settings = settings or get_auth_settings()
+    with get_connection() as connection:
+        row = connection.execute("SELECT * FROM users WHERE email = ?", (settings.allowed_email,)).fetchone()
+        if row is None:
+            identifier = str(uuid.uuid4())
+            connection.execute(
+                "INSERT INTO users(id,email,name,role,status,created_at) VALUES (?,?,?,?,?,?)",
+                (identifier, settings.allowed_email, "Super Admin", "admin", "active", datetime.now(UTC).isoformat()),
+            )
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (identifier,)).fetchone()
+        connection.execute("UPDATE papers SET owner_id = ? WHERE owner_id IS NULL", (row["id"],))
+        return dict(row)
+
+
+def account_for_email(email: str) -> dict[str, Any] | None:
+    from app.db.database import get_connection
+    with get_connection() as connection:
+        row = connection.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
+    return dict(row) if row else None
+
+
+def public_user(user: dict[str, Any]) -> dict[str, str]:
+    return {key: user[key] for key in ("id", "email", "name", "role", "status")}

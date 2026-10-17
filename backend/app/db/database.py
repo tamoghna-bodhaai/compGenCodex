@@ -251,6 +251,76 @@ CREATE TABLE IF NOT EXISTS bank_solution_jobs (
     total_questions INTEGER NOT NULL, completed_questions INTEGER NOT NULL DEFAULT 0,
     error_message TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS bank_solution_jobs_source_idx ON bank_solution_jobs (source_job_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS bank_solution_job_items (
+    job_id TEXT NOT NULL REFERENCES bank_solution_jobs(id) ON DELETE CASCADE,
+    question_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed')),
+    error_message TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, question_id)
+);
+CREATE INDEX IF NOT EXISTS bank_solution_job_items_order_idx ON bank_solution_job_items (job_id, position);
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin','teacher','student')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')),
+    access_code_hash TEXT, owner_id TEXT, session_version INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auth_login_attempts (
+    email TEXT PRIMARY KEY, failed_count INTEGER NOT NULL, window_start INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS question_banks (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft','published')), created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS classrooms (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
+    created_at TEXT NOT NULL, UNIQUE(owner_id,name)
+);
+CREATE TABLE IF NOT EXISTS class_memberships (
+    class_id TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY(class_id,student_id)
+);
+CREATE TABLE IF NOT EXISTS tests (
+    id TEXT PRIMARY KEY, paper_id TEXT NOT NULL REFERENCES papers(id),
+    owner_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','archived')),
+    duration_seconds INTEGER NOT NULL, opens_at TEXT, closes_at TEXT,
+    max_attempts INTEGER NOT NULL DEFAULT 1, results_policy TEXT NOT NULL DEFAULT '{"mode":"immediate"}',
+    published_version_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(paper_id)
+);
+CREATE TABLE IF NOT EXISTS test_versions (
+    id TEXT PRIMARY KEY, test_id TEXT NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, content TEXT NOT NULL, published_at TEXT NOT NULL,
+    UNIQUE(test_id,ordinal)
+);
+CREATE TABLE IF NOT EXISTS test_assignments (
+    test_id TEXT NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+    student_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    class_id TEXT REFERENCES classrooms(id) ON DELETE CASCADE,
+    CHECK ((student_id IS NOT NULL) != (class_id IS NOT NULL)),
+    UNIQUE(test_id,student_id), UNIQUE(test_id,class_id)
+);
+CREATE TABLE IF NOT EXISTS test_attempts (
+    id TEXT PRIMARY KEY, test_id TEXT NOT NULL REFERENCES tests(id),
+    version_id TEXT NOT NULL REFERENCES test_versions(id),
+    student_id TEXT NOT NULL REFERENCES users(id), started_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL, submitted_at TEXT, score REAL, revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS test_attempts_student_idx ON test_attempts(student_id,test_id);
+CREATE TABLE IF NOT EXISTS attempt_responses (
+    attempt_id TEXT NOT NULL REFERENCES test_attempts(id) ON DELETE CASCADE,
+    question_id TEXT NOT NULL, answer TEXT, marked_for_review INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(attempt_id,question_id)
+);
+CREATE TABLE IF NOT EXISTS test_assets (
+    id TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES test_versions(id) ON DELETE CASCADE,
+    storage_path TEXT NOT NULL, mime_type TEXT NOT NULL
+);
 """
 
 
@@ -342,6 +412,20 @@ def initialize_database(path: Path | None = None) -> Path:
         paper_columns = {row[1] for row in connection.execute("PRAGMA table_info(papers)")}
         if "branding_template_id" not in paper_columns:
             connection.execute("ALTER TABLE papers ADD COLUMN branding_template_id TEXT")
+        if "owner_id" not in paper_columns:
+            connection.execute("ALTER TABLE papers ADD COLUMN owner_id TEXT")
+        question_columns = {row[1] for row in connection.execute("PRAGMA table_info(questions)")}
+        if "bank_id" not in question_columns:
+            connection.execute("ALTER TABLE questions ADD COLUMN bank_id TEXT")
+        if "published" not in question_columns:
+            connection.execute("ALTER TABLE questions ADD COLUMN published INTEGER NOT NULL DEFAULT 0")
+        user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
+        if "owner_id" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN owner_id TEXT")
+        if "session_version" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+        connection.execute("INSERT OR IGNORE INTO question_banks(id,name,status,created_at) VALUES ('legacy','CompGen question bank','draft',CURRENT_TIMESTAMP)")
+        connection.execute("UPDATE questions SET bank_id = 'legacy' WHERE bank_id IS NULL")
         migration_name = "repair_persisted_latex_controls_v2"
         applied = connection.execute("SELECT 1 FROM app_migrations WHERE name = ?", (migration_name,)).fetchone()
         if applied is None:

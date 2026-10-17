@@ -1,6 +1,6 @@
 # AI Question Variation & Paper Generator
 
-Local MVP foundation for a teacher-facing JEE question-paper generator. The first seed collection is a user-provided 50-question paper on **Definite Integrals**.
+CompGen combines a curated JEE question bank, variation-based paper authoring, and classroom CBT tests in one FastAPI, SQLite, and Next.js application. The first seed collection is a user-provided 50-question paper on **Definite Integrals**.
 
 ## What is implemented now
 
@@ -13,6 +13,7 @@ Local MVP foundation for a teacher-facing JEE question-paper generator. The firs
 - Independent validation, a configurable three-attempt retry limit, source-similarity rejection, and generation logs.
 - Persisted paper builder API with sections, manual questions, question editing, question locking, and selective or unlocked-only regeneration.
 - Print-ready DOCX and PDF exports with branded paper details, candidate fields, sections, options, and answer-key variants.
+- Global question bank publication, individual teacher and student accounts, class rosters, immutable test versions, assignments, timed attempts, scoring, results, and teacher analytics.
 - A verified visual transcription of the supplied PDF stored as structured JSON.
 
 ## JEE assessment formats and source review
@@ -46,13 +47,30 @@ npm run dev
 
 Open `http://127.0.0.1:3000/` for Paper Studio. FastAPI documentation remains at `http://127.0.0.1:8000/docs`. The Next.js server proxies relative `/api/*` calls to FastAPI; set `BACKEND_URL` in `frontend/.env.local` only when the backend uses another address.
 
-## Test access
+## Accounts and classroom tests
 
-Paper Studio is protected by a small test-phase access gate. Only the email in
-`AUTH_ALLOWED_EMAIL` (set to `utils@bodhaai.tech`) and one of the reusable,
-comma-separated five-digit numeric codes in `AUTH_ACCESS_CODES` can sign in. This is deliberately
-not a multi-user account system: codes are shared, there is no registration or
-password reset, and changing the environment variable rotates access.
+The account named by `AUTH_ALLOWED_EMAIL` is bootstrapped as the super admin and
+continues to sign in with one of the five-digit `AUTH_ACCESS_CODES`. Existing
+papers are assigned to that account during the additive database migration.
+The super admin creates individual teachers in **People & global banks**.
+Teachers create students in **Tests & classes**. Each teacher and student has
+their own email and five-digit access code; managers can suspend accounts or
+rotate codes. Rotation invalidates existing sessions.
+
+Only the super admin can ingest and publish questions to global banks. The
+admin first reviews an ingested source in the existing review flow, then
+publishes its questions from **People & global banks**. Teachers can browse
+published bank questions, add them to a paper, or use the existing variation
+generator. The paper editor remains the test authoring surface.
+
+Choose **Publish as CBT test** in a paper to snapshot question order, content,
+answers, response specifications, marks, and diagrams. Publication reports
+item-level errors for missing answers, media, or grading rules. A paper edit can
+be republished as a new version; started attempts retain their original version.
+In **Tests & classes**, assign the test to classes and/or individual students.
+Students sign in to **My tests** to start or resume timed attempts. Answers are
+saved as they work; expiry submits automatically. Results are released
+immediately or at the scheduled time selected when publishing.
 
 For local development, copy the values from `.env.example`, choose real codes
 and a random `AUTH_SESSION_SECRET` of at least 32 characters, and leave
@@ -67,7 +85,8 @@ Directory so it discovers the matching `railway.toml`:
    includes PDF export (LaTeX/LibreOffice) and scanned-PDF OCR (Tesseract).
    Attach one Railway Volume mounted at `/data`, set the replica count to
    **one**, then set `DATABASE_URL=sqlite:////data/db/question_generator.db`
-   and `EXPORT_ROOT=/data/exports`. SQLite runs with WAL and a busy timeout;
+   and `EXPORT_ROOT=/data/exports`. Immutable CBT media is stored next to the
+   database on this volume. SQLite runs with WAL and a busy timeout;
    do not attach this volume to multiple API replicas.
    Add `AUTH_ALLOWED_EMAIL=utils@bodhaai.tech`, `AUTH_ACCESS_CODES`, a random
    32+ character `AUTH_SESSION_SECRET`, `AUTH_SESSION_TTL_HOURS=168`, and
@@ -105,17 +124,17 @@ PYTHONPATH=/app python /app/scripts/import_legacy_exports.py \
 Keep the manifest on the volume, enable Railway Volume backups, and rehearse a
 restore into a staging environment before relying on production data.
 
-The backend is intentionally private behind the frontend proxy. Before any
-multi-user or production release, replace shared codes and SQLite with a
-proper user model and PostgreSQL.
+The backend is intentionally private behind the frontend proxy. Keep the API
+at one replica while it uses the persistent SQLite volume, and back up the
+database and media together.
 
 ## Paper Studio frontend
 
-The TypeScript Next.js application in `frontend/` lets a teacher:
+The TypeScript Next.js application in `frontend/` lets an authorized user:
 
 - create a medium-difficulty JEE Definite Integrals draft;
 - browse seed availability through the same exam, subject, chapter, topic, and subtopic taxonomy used by paper creation;
-- ingest pasted questions or PDF/DOCX question sets into reviewable seed records;
+- ingest pasted questions or PDF/DOCX question sets into reviewable seed records as super admin;
 - write, edit, section, lock, delete, or regenerate paper questions;
 - set institution, duration, marks, and instruction fields for exports; and
 - download the student paper as DOCX or PDF.
@@ -163,12 +182,6 @@ Set `DIAGRAM_GENERATION_MODEL` to an OpenRouter image-capable model (for example
 - a conservative verification status and null answer/solution fields
 
 Run the seed script repeatedly; it upserts by a stable source key and does not duplicate questions.
-
-## Next build steps
-
-1. Add a reviewer flow to verify answers and attach solutions to the imported questions.
-2. Add embedding generation to supplement the present metadata-first lexical-semantic fallback.
-3. Add reviewer workflows for answer verification and solutions.
 
 ## Frontend verification
 

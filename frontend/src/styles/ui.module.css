@@ -497,7 +497,23 @@
 .sourceReviewQuestion { min-width: 0; line-height: 1.6; }
 .sourceReviewQuestion header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
 .sourceReviewQuestion header span { color: var(--muted); font-size: 12px; }
-.sourceReviewQuestion section { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.sourceReviewQuestionBody { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 24px; }
+.sourceReviewPrompt, .sourceReviewSolution { display: grid; align-content: start; gap: 12px; min-width: 0; }
+.sourceReviewSolution { border-left: 1px solid var(--line); padding-left: 24px; }
+.sourceReviewSolutionDetails { min-width: 0; }
+.sourceReviewSolutionDetails summary { display: flex; align-items: center; gap: 8px; width: fit-content; list-style: none; cursor: pointer; font-size: 13px; font-weight: 650; }
+.sourceReviewSolutionDetails summary::-webkit-details-marker { display: none; }
+.sourceReviewSolutionDetails summary::before { content: "›"; display: inline-block; font-size: 20px; line-height: 1; transition: transform .15s ease; }
+.sourceReviewSolutionDetails[open] summary::before { transform: rotate(90deg); }
+.sourceReviewSolutionDetails summary small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.sourceReviewSolutionDetails > div, .sourceReviewSolutionDetails > p { margin-top: 10px; }
+.sourceReviewMissingCount { color: var(--muted); font-size: 13px; }
+.sourceReviewProgress { display: grid; gap: 9px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: #f8fafc; }
+.sourceReviewProgress > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.sourceReviewProgress span { color: var(--muted); font-size: 13px; }
+.sourceReviewProgress progress { width: 100%; height: 9px; accent-color: #2563eb; }
+.sourceReviewFailure { color: #b42318; }
 .sourceReviewQuestion button { justify-self: start; }
 .sourceReviewOptions { display: grid; gap: 10px; margin: 0; padding-left: 28px; }
+@media (max-width: 800px) { .sourceReviewQuestionBody { grid-template-columns: 1fr; } .sourceReviewSolution { border-left: 0; border-top: 1px solid var(--line); padding: 12px 0 0; } }
 @media (max-width: 700px) { .sourceReviewFilters { grid-template-columns: 1fr; } }

@@ -8,6 +8,7 @@ import type { IngestionJob, PaperSummary } from "@/lib/types";
 interface ToastItem { id: number; message: string; tone: "default" | "error" }
 
 interface WorkspaceValue {
+  role: "admin" | "teacher" | "student";
   papers: PaperSummary[];
   ingestionJobs: IngestionJob[];
   loading: boolean;
@@ -19,7 +20,7 @@ interface WorkspaceValue {
 
 const WorkspaceContext = createContext<WorkspaceValue | null>(null);
 
-export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
+export function WorkspaceProvider({ children, role }: { children: React.ReactNode; role: "admin" | "teacher" | "student" }) {
   const [papers, setPapers] = useState<PaperSummary[]>([]);
   const [ingestionJobs, setIngestionJobs] = useState<IngestionJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,7 +34,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const controller = new AbortController();
     refreshController.current = controller;
     try {
-      const [paperResult, ingestionResult] = await Promise.all([api.papers(controller.signal), api.ingestionJobs(controller.signal)]);
+      const [paperResult, ingestionResult] = await Promise.all([role === "student" ? Promise.resolve({ items: [] }) : api.papers(controller.signal), role === "admin" ? api.ingestionJobs(controller.signal) : Promise.resolve({ items: [] })]);
       if (controller.signal.aborted) return;
       setPapers(paperResult.items);
       setIngestionJobs(ingestionResult.items);
@@ -47,7 +48,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     void refresh();
@@ -71,7 +72,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 4200);
   }, []);
 
-  const value = useMemo(() => ({ papers, ingestionJobs, loading, error, refresh, setIngestionJob, toast }), [papers, ingestionJobs, loading, error, refresh, setIngestionJob, toast]);
+  const value = useMemo(() => ({ role, papers, ingestionJobs, loading, error, refresh, setIngestionJob, toast }), [role, papers, ingestionJobs, loading, error, refresh, setIngestionJob, toast]);
 
   return (
     <WorkspaceContext.Provider value={value}>

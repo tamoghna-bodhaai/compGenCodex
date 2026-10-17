@@ -5,6 +5,12 @@ export type QuestionType = "single_correct_mcq" | "multiple_correct_mcq" | "nume
 export type GenerationMode = "structural_variation" | "concept_variation";
 export type VariationStrength = "close" | "balanced" | "high";
 
+export interface SessionAccount { id: string; email: string; name: string; role: "admin" | "teacher" | "student"; status: string }
+export interface Classroom { id: string; name: string; students: SessionAccount[] }
+export interface CbtTest { id: string; paper_id: string; title: string; status: string; duration_seconds: number; opens_at: string | null; closes_at: string | null; max_attempts: number; results_policy: { mode: string; release_at?: string }; question_count: number; version: number; assignment_count: number; assignments?: Array<{ class_id: string | null; student_id: string | null }>; questions?: CbtQuestion[]; availability?: string; attempts_remaining?: number; latest_attempt?: CbtAttempt | null }
+export interface CbtQuestion { id: string; section: string | null; kind: QuestionType; stem: string; options: string[]; diagrams: Array<{ id: string; url: string; option_index: number | null; description: string }>; response_spec: ResponseSpec; scoring: { full: number; negative: number; zero: number; partial?: Record<string, number> }; answer?: unknown; solution?: string }
+export interface CbtAttempt { id: string; test_id: string; started_at: string; ends_at: string; submitted_at: string | null; score: number | null; revision: number; questions: CbtQuestion[]; responses: Record<string, { answer: unknown; marked_for_review: boolean }> }
+
 export interface GenerationJob {
   id: string;
   paper_id: string;
@@ -34,6 +40,16 @@ export interface IngestionJob {
   review_questions?: number;
   skipped_chunks?: number;
   retryable_chunks?: number;
+}
+
+export interface BankSolutionJob {
+  id: string;
+  source_job_id: string | null;
+  state: JobState;
+  total_questions: number;
+  completed_questions: number;
+  error_message?: string | null;
+  items: Array<{ question_id: string; state: JobState; error_message?: string | null }>;
 }
 
 export interface QuestionJson {

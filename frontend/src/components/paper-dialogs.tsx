@@ -71,8 +71,8 @@ export function PaperDialogs({ kind, paper, comparisonQuestion, onClose, onChang
   async function addSource(question: SeedQuestion) {
     setSubmitting(true);
     try {
-      await api.post(`/papers/${paper.id}/questions/manual`, { question_type: "single_correct_mcq", stem: question.question_json.stem, options: question.question_json.options || [], correct_answer: null, solution: null, difficulty: question.difficulty, marks: question.marks || 3, primary_concept: question.primary_concept || null, secondary_concepts: question.secondary_concepts || [], estimated_time_minutes: question.expected_time_minutes || 3, section_id: null });
-      await onChanged(); onClose(); toast("Source question added. Verify the answer before export.");
+      await api.post(`/papers/${paper.id}/questions/from-bank`, { seed_question_id: question.id, section_id: null });
+      await onChanged(); onClose(); toast("Bank question added with its reviewed answer and response rules.");
     } catch (caught) { toast(caught instanceof Error ? caught.message : "Couldn’t add the source question.", "error"); }
     finally { setSubmitting(false); }
   }

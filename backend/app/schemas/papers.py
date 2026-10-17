@@ -83,6 +83,11 @@ class AddManualQuestionRequest(PaperQuestionInput):
     section_id: str | None = None
 
 
+class AddBankQuestionRequest(BaseModel):
+    seed_question_id: str
+    section_id: str | None = None
+
+
 class QuestionEditRequest(BaseModel):
     stem: str | None = Field(default=None, min_length=1)
     options: list[str] | None = None

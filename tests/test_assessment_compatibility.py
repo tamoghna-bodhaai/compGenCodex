@@ -20,7 +20,7 @@ from app.services.seed_import import upsert_questions
 from app.services.source_material import add_attachment, delete_source, delete_question, map_manually, parse_entries
 from app.api.questions import question_catalog, export_ingested_source
 from app.schemas.papers import ExportFormat, ExportVariant
-from app.services.bank_solutions import queue_solution_job, run_solution_job, get_solution_job
+from app.services.bank_solutions import queue_solution_job, run_solution_job, get_solution_job, latest_source_solution_job
 
 
 class AssessmentCompatibilityTests(unittest.TestCase):
@@ -176,12 +176,19 @@ class AssessmentCompatibilityTests(unittest.TestCase):
     def test_ai_solution_is_validated_and_marked_for_review(self) -> None:
         job = QuestionIngestionService().create_job("solutions.pdf")
         identifier = self._seed(job["id"], 1, legacy_response_spec("single_correct_mcq", 4))
-        queued = queue_solution_job(question_ids=[identifier])
+        queued = queue_solution_job(source_job_id=job["id"], question_ids=[identifier])
+        self.assertEqual(queued["items"], [{"question_id": identifier, "state": "queued", "error_message": None}])
+        self.assertEqual(latest_source_solution_job(job["id"])["id"], queued["id"])
+        self.assertTrue(queue_solution_job(source_job_id=job["id"], question_ids=[identifier])["reused"])
         fake = type("Result", (), {"correct_answer": "B", "solution": "Worked solution"})()
+        async def generate(*args, **kwargs):
+            self.assertEqual(get_solution_job(queued["id"])["items"][0]["state"], "running")
+            return fake
         with patch("app.services.bank_solutions.GenerationService") as service:
-            service.return_value.generate_solution = AsyncMock(return_value=fake)
+            service.return_value.generate_solution = AsyncMock(side_effect=generate)
             asyncio.run(run_solution_job(queued["id"]))
         self.assertEqual(get_solution_job(queued["id"])["state"], "succeeded")
+        self.assertEqual(get_solution_job(queued["id"])["items"][0]["state"], "succeeded")
         with get_connection() as connection:
             row = connection.execute("SELECT verification_status, answer_provenance, solution_provenance FROM questions WHERE id = ?", (identifier,)).fetchone()
         self.assertEqual(tuple(row), ("pending_review", "ai", "ai"))
@@ -200,6 +207,28 @@ class AssessmentCompatibilityTests(unittest.TestCase):
             service.return_value.generate_solution = AsyncMock(return_value=fake)
             asyncio.run(run_solution_job(retry["id"]))
         self.assertEqual(get_solution_job(retry["id"])["state"], "failed")
+        self.assertEqual(get_solution_job(retry["id"])["items"][0]["state"], "failed")
+        self.assertTrue(get_solution_job(retry["id"])["items"][0]["error_message"])
+
+    def test_finished_solutions_are_visible_before_the_batch_finishes(self) -> None:
+        source = QuestionIngestionService().create_job("batch.pdf")
+        ids = [self._seed(source["id"], number, legacy_response_spec("single_correct_mcq", 4)) for number in (1, 2)]
+        queued = queue_solution_job(source_job_id=source["id"])
+        self.assertEqual([item["question_id"] for item in queued["items"]], ids)
+
+        async def generate(*args, **kwargs):
+            if get_solution_job(queued["id"])["items"][0]["state"] == "succeeded":
+                progress = get_solution_job(queued["id"])
+                self.assertEqual(progress["completed_questions"], 1)
+                self.assertEqual([item["state"] for item in progress["items"]], ["succeeded", "running"])
+                with get_connection() as connection:
+                    self.assertEqual(connection.execute("SELECT solution FROM questions WHERE id = ?", (ids[0],)).fetchone()[0], "Step by step")
+            return type("Result", (), {"correct_answer": "B", "solution": "Step by step"})()
+
+        with patch("app.services.bank_solutions.GenerationService") as service:
+            service.return_value.generate_solution = AsyncMock(side_effect=generate)
+            asyncio.run(run_solution_job(queued["id"]))
+        self.assertEqual(get_solution_job(queued["id"])["completed_questions"], 2)
 
 
 def get_rows(query: str):

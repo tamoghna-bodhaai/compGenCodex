@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from app.db.database import decode_question_row, get_connection
+from app.core.auth import current_user_context
 from app.services.diagrams import diagrams_for
 from app.schemas.generation import GenerationRequest, GenerationSlot
 
@@ -60,6 +61,9 @@ class MetadataFirstRetriever:
         if slot.selected_seed_question_ids or slot.selected_seed_question_id:
             return self._retrieve_selected_seeds(request, slot)
         clauses = ["exam = ?", "subject = ?", "question_type = ?", "(response_spec_json IS NULL OR json_extract(response_spec_json, '$.supported_for_generation') = 1)"]
+        actor = current_user_context.get()
+        if actor and actor["role"] != "admin":
+            clauses.append("published = 1")
         parameters: list[object] = [request.exam, request.subject, slot.question_type.value]
         slot_chapters = slot.chapters or request.chapters
         slot_topics = [slot.topic] if slot.topic else request.topics
@@ -105,6 +109,9 @@ class MetadataFirstRetriever:
         placeholders = ",".join("?" for _ in selected_ids)
         with get_connection() as connection:
             rows = connection.execute(f"SELECT * FROM questions WHERE id IN ({placeholders})", selected_ids).fetchall()
+        actor = current_user_context.get()
+        if actor and actor["role"] != "admin":
+            rows = [row for row in rows if row["published"]]
         by_id = {row["id"]: decode_question_row(row) for row in rows}
         if len(by_id) != len(selected_ids):
             raise RetrievalError("A selected source question is no longer available in the question bank.")

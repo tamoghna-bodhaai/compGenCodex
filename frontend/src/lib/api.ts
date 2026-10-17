@@ -1,5 +1,6 @@
 import type {
   BrandingProfile,
+  BankSolutionJob,
   CatalogRow,
   IngestionJob,
   IngestionReport,
@@ -9,6 +10,7 @@ import type {
   SeedComparison,
   PaperExport,
   PaperComparison,
+  SessionAccount, Classroom, CbtTest, CbtAttempt, CbtQuestion,
 } from "@/lib/types";
 
 export class ApiError extends Error {
@@ -20,6 +22,10 @@ export class ApiError extends Error {
 
 function errorDetailMessage(detail: unknown): string | null {
   if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const value = detail as { message?: string; questions?: Array<{ position: number; reason: string }> };
+    if (value.message) return `${value.message}${value.questions?.length ? `: ${value.questions.map(item => `Q${item.position} ${item.reason}`).join("; ")}` : ""}`;
+  }
   if (Array.isArray(detail)) {
     const messages = detail.map((item) => {
       if (!item || typeof item !== "object") return null;
@@ -57,9 +63,30 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 }
 
 export const api = {
-  login: (email: string, accessCode: string) => apiRequest<{ authenticated: boolean; user: { email: string } }>("/auth/login", { method: "POST", body: JSON.stringify({ email, access_code: accessCode }) }),
+  login: (email: string, accessCode: string) => apiRequest<{ authenticated: boolean; user: SessionAccount }>("/auth/login", { method: "POST", body: JSON.stringify({ email, access_code: accessCode }) }),
   logout: () => apiRequest<void>("/auth/logout", { method: "POST" }),
-  session: () => apiRequest<{ authenticated: boolean; user: { email: string } | null }>("/auth/session"),
+  session: () => apiRequest<{ authenticated: boolean; user: SessionAccount | null }>("/auth/session"),
+  teachers: () => apiRequest<{ items: SessionAccount[] }>("/auth/teachers"),
+  createTeacher: (body: unknown) => apiRequest<SessionAccount>("/auth/teachers", { method: "POST", body: JSON.stringify(body) }),
+  updateTeacher: (id: string, body: unknown) => apiRequest<SessionAccount>(`/auth/teachers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  banks: () => apiRequest<{ items: Array<{ id: string; name: string; status: string; question_count: number }> }>("/banks"),
+  createBank: (name: string) => apiRequest<{ id: string }>("/banks", { method: "POST", body: JSON.stringify({ name }) }),
+  publishBank: (id: string, body: unknown) => apiRequest<{ published_count: number }>(`/banks/${id}/publish`, { method: "POST", body: JSON.stringify(body) }),
+  classes: () => apiRequest<{ items: Classroom[] }>("/assessments/classes"),
+  createClass: (name: string) => apiRequest<Classroom>("/assessments/classes", { method: "POST", body: JSON.stringify({ name }) }),
+  createStudent: (classId: string, body: unknown) => apiRequest<SessionAccount>(`/assessments/classes/${classId}/students`, { method: "POST", body: JSON.stringify(body) }),
+  updateStudent: (id: string, body: unknown) => apiRequest<SessionAccount>(`/assessments/students/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  publishTest: (paperId: string, body: unknown) => apiRequest<CbtTest>(`/assessments/papers/${paperId}/publish`, { method: "POST", body: JSON.stringify(body) }),
+  tests: () => apiRequest<{ items: CbtTest[] }>("/assessments/tests"),
+  test: (id: string) => apiRequest<CbtTest>(`/assessments/tests/${id}`),
+  assignTest: (id: string, body: unknown) => apiRequest<unknown>(`/assessments/tests/${id}/assignments`, { method: "PUT", body: JSON.stringify(body) }),
+  testAnalytics: (id: string) => apiRequest<{ summary: { assigned: number; started: number; submitted: number }; students: Array<{ student: SessionAccount; status: string; score: number | null; attempt_count: number }> }>(`/assessments/tests/${id}/analytics`),
+  studentTests: () => apiRequest<{ items: CbtTest[] }>("/assessments/student/tests"),
+  startAttempt: (id: string) => apiRequest<CbtAttempt>(`/assessments/student/tests/${id}/attempts`, { method: "POST" }),
+  attempt: (id: string) => apiRequest<CbtAttempt>(`/assessments/attempts/${id}`),
+  saveAttemptAnswer: (attemptId: string, questionId: string, body: unknown) => apiRequest<{ revision: number }>(`/assessments/attempts/${attemptId}/responses/${questionId}`, { method: "PUT", body: JSON.stringify(body) }),
+  submitAttempt: (id: string) => apiRequest<CbtAttempt>(`/assessments/attempts/${id}/submit`, { method: "POST" }),
+  result: (id: string) => apiRequest<{ attempt: CbtAttempt; questions: Array<CbtQuestion & { response: unknown; points: number; correct: boolean | null }> }>(`/assessments/results/${id}`),
   papers: (signal?: AbortSignal) => apiRequest<{ items: PaperSummary[] }>("/papers", { signal }),
   paper: (id: string, signal?: AbortSignal) => apiRequest<Paper>(`/papers/${id}`, { signal }),
   paperQuestionSeeds: (paperId: string, questionId: string, signal?: AbortSignal) => apiRequest<SeedComparison>(`/papers/${paperId}/questions/${questionId}/seeds`, { signal }),
@@ -78,8 +105,9 @@ export const api = {
   resolveSourceMapping: (jobId: string, mappingId: string, questionId: string) => apiRequest<void>(`/questions/ingestion-jobs/${jobId}/mappings/${mappingId}`, { method: "POST", body: JSON.stringify({ question_id: questionId }) }),
   promoteCandidate: (jobId: string, candidateId: string, changes: Record<string, unknown>) => apiRequest<void>(`/questions/ingestion-jobs/${jobId}/candidates/${candidateId}/promote`, { method: "POST", body: JSON.stringify({ changes }) }),
   deleteQuestion: (id: string) => apiRequest<void>(`/questions/${id}`, { method: "DELETE" }),
-  generateBankSolutions: (scope: unknown) => apiRequest<{ job: { id: string; state: string; total_questions: number } }>("/questions/solutions/generate", { method: "POST", body: JSON.stringify(scope) }),
-  bankSolutionJob: (id: string) => apiRequest<{ id: string; state: string; total_questions: number; completed_questions: number; error_message?: string }>(`/questions/solution-jobs/${id}`),
+  generateBankSolutions: (scope: unknown) => apiRequest<{ job: BankSolutionJob }>("/questions/solutions/generate", { method: "POST", body: JSON.stringify(scope) }),
+  bankSolutionJob: (id: string) => apiRequest<BankSolutionJob>(`/questions/solution-jobs/${id}`),
+  sourceSolutionJob: (sourceJobId: string) => apiRequest<{ job: BankSolutionJob | null }>(`/questions/solution-jobs?source_job_id=${encodeURIComponent(sourceJobId)}`),
   ingest: (body: FormData) => apiRequest<{ job: IngestionJob }>("/questions/ingest", { method: "POST", body }),
   createReferencePaper: (body: FormData) => apiRequest<Paper>("/papers/from-reference", { method: "POST", body }),
   questions: (query: URLSearchParams, signal?: AbortSignal) => apiRequest<{ items: SeedQuestion[]; total: number; offset: number }>(`/questions?${query}`, { signal }),
